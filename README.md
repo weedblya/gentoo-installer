@@ -23,9 +23,9 @@ Init:
 - systemd
 - OpenRC
 
-The kernel method is selected during the first stage. The manual method is interactive and requires the user to configure the kernel before continuing.
+Способ установки ядра выбирается на первом этапе. Ручной режим интерактивный: перед продолжением пользователь должен самостоятельно настроить ядро.
 
-The login manager is selected during the second stage:
+Менеджер входа выбирается на втором этапе:
 
 - **Ly** — минималистичный TUI-экран входа; удобен для Niri/Hyprland.
 - **SDDM** — графический экран входа; наиболее естественный вариант для KDE Plasma.
@@ -33,12 +33,12 @@ The login manager is selected during the second stage:
 
 Для KDE по умолчанию предлагается SDDM, для остальных профилей — Ly. Выбор можно изменить в интерактивном меню.
 
-Kernel installation method (selected in the first stage):
+Способ установки ядра (выбирается на первом этапе):
 
-- **Automatic** — installs `sys-kernel/gentoo-kernel`, built locally by Portage.
-- **Binary** — installs `sys-kernel/gentoo-kernel-bin` from a compatible binary package host; installation stops with an error if no compatible binary package is available.
-- **Manual** — installs `sys-kernel/gentoo-sources` and `sys-kernel/genkernel`, opens `make menuconfig`, builds and installs the kernel, then generates an initramfs.
-- `MAKEOPTS` is calculated automatically from CPU/RAM for Portage builds.
+- **Automatic (автоматический)** — устанавливает `sys-kernel/gentoo-kernel`, который Portage собирает локально.
+- **Binary (бинарный)** — устанавливает `sys-kernel/gentoo-kernel-bin` с совместимого сервера бинарных пакетов. Если подходящий бинарный пакет недоступен, установка завершится с ошибкой.
+- **Manual (ручной)** — устанавливает `sys-kernel/gentoo-sources` и `sys-kernel/genkernel`, открывает `make menuconfig`, собирает и устанавливает ядро, а затем создаёт initramfs.
+- `MAKEOPTS` для сборки через Portage рассчитывается автоматически с учётом CPU и RAM.
 
 Видеокарта:
 
@@ -85,7 +85,7 @@ chmod +x install_part1.sh install_part2.sh
 
 1. диск;
 2. профиль;
-3. kernel installation method (automatic / binary / manual);
+3. способ установки ядра (automatic / binary / manual);
 4. init;
 5. GPU vendor (NVIDIA / AMD / Intel / Other);
 6. partitioning method;
