@@ -291,10 +291,46 @@ EOF
 chmod 0440 /etc/sudoers.d/10-wheel
 visudo -c
 
-# Kernel: source gentoo-kernel, never gentoo-kernel-bin.
+# Install the kernel using the method selected in part 1.
 echo
-echo "Installing gentoo-kernel (local build)..."
-portage_emerge --usepkg=n --buildpkg=n sys-kernel/gentoo-kernel
+case "${KERNEL_TYPE:-automatic}" in
+    automatic)
+        echo "Installing gentoo-kernel (automatic source build)..."
+        portage_emerge --usepkg=n --buildpkg=n sys-kernel/gentoo-kernel
+        ;;
+    binary)
+        echo "Installing a prebuilt Gentoo binary kernel..."
+        if ! emerge --ask=n --verbose --getbinpkgonly \
+            --autounmask=y --autounmask-write=y \
+            --autounmask-unrestricted-atoms=y --backtrack=30 \
+            sys-kernel/gentoo-kernel-bin; then
+            die "A compatible binary kernel package is unavailable. Re-run the installer and choose another kernel method."
+        fi
+        ;;
+    manual)
+        echo "Installing kernel sources for manual configuration..."
+        portage_emerge sys-kernel/gentoo-sources sys-kernel/genkernel
+        KERNEL_SOURCE="$(eselect kernel list 2>/dev/null | awk -F']' '/\[.*\*/ {print $2; exit}' | xargs || true)"
+        if [[ -z "$KERNEL_SOURCE" || ! -d "$KERNEL_SOURCE" ]]; then
+            KERNEL_SOURCE="$(find /usr/src -maxdepth 1 -type d -name 'linux-*' | sort -V | tail -n 1)"
+        fi
+        [[ -n "$KERNEL_SOURCE" && -d "$KERNEL_SOURCE" ]] || die "Could not locate installed kernel sources in /usr/src."
+        ln -sfn "$KERNEL_SOURCE" /usr/src/linux
+        cd /usr/src/linux
+        echo "Opening kernel configuration menu. Save your configuration and exit when finished."
+        make menuconfig
+        echo "Building your custom kernel..."
+        make -j"$JOBS"
+        make modules_install
+        make install
+        echo "Generating an initramfs for the custom kernel..."
+        genkernel --install initramfs
+        cd /
+        ;;
+    *)
+        die "Unknown kernel installation method: $KERNEL_TYPE"
+        ;;
+esac
 
 # Init/system services.
 if [[ "$INIT" == systemd ]]; then
@@ -429,10 +465,11 @@ $( [[ "$PROFILE" == gentoo_hyprland ]] && echo "- hyproverlay" )
 
 Important:
 - GPU vendor: ${GPU_VENDOR:-Other}.
+- Kernel method: ${KERNEL_TYPE:-automatic}.
 - GPU-specific VIDEO_CARDS flags are configured in package.use/00-video_cards when applicable.
 - NVIDIA uses x11-drivers/nvidia-drivers; AMD uses the in-kernel AMDGPU/Radeon driver and Mesa; Intel uses the in-kernel driver and Mesa.
 - x11-base/xwayland is installed for every profile.
-- sys-kernel/gentoo-kernel is used, not gentoo-kernel-bin.
+- Kernel method selected: ${KERNEL_TYPE:-automatic}.
 EOF
 
 cp "$LOG" /root/gentoo-install-part2-final.log || true

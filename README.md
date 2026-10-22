@@ -23,7 +23,9 @@ Init:
 - systemd
 - OpenRC
 
-Менеджер входа выбирается во второй части установки:
+The kernel method is selected during the first stage. The manual method is interactive and requires the user to configure the kernel before continuing.
+
+The login manager is selected during the second stage:
 
 - **Ly** — минималистичный TUI-экран входа; удобен для Niri/Hyprland.
 - **SDDM** — графический экран входа; наиболее естественный вариант для KDE Plasma.
@@ -31,12 +33,12 @@ Init:
 
 Для KDE по умолчанию предлагается SDDM, для остальных профилей — Ly. Выбор можно изменить в интерактивном меню.
 
-Ядро:
+Kernel installation method (selected in the first stage):
 
-- используется **`sys-kernel/gentoo-kernel`**;
-- **`gentoo-kernel-bin` не используется**;
-- ядро собирается локально на устанавливаемой машине;
-- `MAKEOPTS` рассчитывается автоматически по CPU/RAM.
+- **Automatic** — installs `sys-kernel/gentoo-kernel`, built locally by Portage.
+- **Binary** — installs `sys-kernel/gentoo-kernel-bin` from a compatible binary package host; installation stops with an error if no compatible binary package is available.
+- **Manual** — installs `sys-kernel/gentoo-sources` and `sys-kernel/genkernel`, opens `make menuconfig`, builds and installs the kernel, then generates an initramfs.
+- `MAKEOPTS` is calculated automatically from CPU/RAM for Portage builds.
 
 Видеокарта:
 
@@ -83,10 +85,11 @@ chmod +x install_part1.sh install_part2.sh
 
 1. диск;
 2. профиль;
-3. init;
-4. производителя видеокарты (NVIDIA / AMD / Intel / Other);
-5. способ разметки;
-6. размер swap при автоматической разметке.
+3. kernel installation method (automatic / binary / manual);
+4. init;
+5. GPU vendor (NVIDIA / AMD / Intel / Other);
+6. partitioning method;
+7. swap size for automatic partitioning.
 
 Например, для автоматической разметки можно указать:
 
