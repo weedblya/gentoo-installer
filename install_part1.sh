@@ -78,6 +78,18 @@ select PROFILE in gentoo_base gentoo_niri gentoo_hyprland gentoo_kde; do
 done
 
 echo
+echo "Kernel installation method:"
+select KERNEL_TYPE in automatic binary manual; do
+    [[ -n "${KERNEL_TYPE:-}" ]] && break
+done
+
+case "$KERNEL_TYPE" in
+    automatic) KERNEL_LABEL="Distribution kernel (automatic build)" ;;
+    binary)    KERNEL_LABEL="Binary kernel (prebuilt package)" ;;
+    manual)    KERNEL_LABEL="Custom kernel (manual configuration)" ;;
+esac
+
+echo
 echo "Init:"
 select INIT in systemd OpenRC; do
     [[ -n "${INIT:-}" ]] && break
@@ -118,6 +130,7 @@ echo
 echo "Selected:"
 echo "  Disk:    $DISK"
 echo "  Profile: $PROFILE"
+echo "  Kernel:  $KERNEL_LABEL"
 echo "  Init:    $INIT"
 echo "  GPU:     $GPU_VENDOR"
 echo "  Mode:    $PARTMODE"
@@ -292,6 +305,7 @@ fi
 
 cat > "$TARGET/root/gentoo-installer.conf" <<EOF
 PROFILE="$PROFILE"
+KERNEL_TYPE="$KERNEL_TYPE"
 INIT="$INIT"
 GPU_VENDOR="$GPU_VENDOR"
 EFI="$EFI"
