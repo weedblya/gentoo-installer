@@ -304,7 +304,19 @@ case "${KERNEL_TYPE:-automatic}" in
             --autounmask=y --autounmask-write=y \
             --autounmask-unrestricted-atoms=y --backtrack=30 \
             sys-kernel/gentoo-kernel-bin; then
-            die "A compatible binary kernel package is unavailable. Re-run the installer and choose another kernel method."
+            echo
+            echo "[WARN] A compatible binary kernel could not be installed."
+            read -r -p "Install the regular gentoo-kernel instead (built locally)? [Y/n]: " KERNEL_FALLBACK
+            case "${KERNEL_FALLBACK:-Y}" in
+                [Yy]|[Yy][Ee][Ss])
+                    echo "Falling back to the regular gentoo-kernel..."
+                    portage_emerge --usepkg=n --buildpkg=n sys-kernel/gentoo-kernel
+                    KERNEL_TYPE="automatic"
+                    ;;
+                *)
+                    die "Binary kernel installation failed and fallback was declined."
+                    ;;
+            esac
         fi
         ;;
     manual)
