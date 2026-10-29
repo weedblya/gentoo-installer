@@ -194,6 +194,13 @@ emerge --ask=n --verbose --getbinpkg     --autounmask=y --autounmask-write=y --a
 eselect repository enable guru
 emaint sync -r guru
 
+if [[ "$PROFILE" == gentoo_mangowm ]]; then
+    cat > /etc/portage/package.accept_keywords/mangowm <<'EOF'
+gui-libs/scenefx ~amd64
+gui-wm/mangowm ~amd64
+EOF
+fi
+
 if [[ "$PROFILE" == gentoo_hyprland ]]; then
     eselect repository enable hyproverlay
     emaint sync -r hyproverlay
@@ -378,6 +385,9 @@ case "$PROFILE" in
         ;;
     gentoo_hyprland)
         portage_emerge gui-wm/hyprland gui-apps/waybar gui-libs/xdg-desktop-portal-hyprland gui-apps/hyprlock gui-apps/hypridle gui-apps/hyprpaper gui-apps/hyprpicker
+        ;;
+    gentoo_mangowm)
+        portage_emerge gui-wm/mangowm gui-apps/waybar gui-apps/fuzzel gui-apps/mako gui-apps/swaybg gui-apps/foot x11-misc/rofi
         ;;
     gentoo_kde)
         portage_emerge kde-plasma/plasma-meta kde-apps/dolphin kde-apps/konsole x11-base/xorg-server
