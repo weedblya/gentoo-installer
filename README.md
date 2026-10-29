@@ -16,6 +16,7 @@
 - `gentoo_base` — базовая desktop-ready система без привязки к WM/DE; X11/Wayland и XWayland.
 - `gentoo_niri` — база + Niri, Waybar, fuzzel, mako, swaybg, swayidle и swaylock; менеджер входа выбирается отдельно.
 - `gentoo_hyprland` — база + Hyprland, Waybar, portal Hyprland, hyprlock, hypridle, hyprpaper и hyprpicker; менеджер входа выбирается отдельно.
+- `gentoo_mangowm` — база + MangoWM, Waybar, fuzzel, mako, swaybg, foot и rofi; менеджер входа выбирается отдельно. MangoWM и SceneFX устанавливаются из GURU с `~amd64`.
 - `gentoo_kde` — KDE Plasma 6, Dolphin и Konsole; использует отдельный Gentoo desktop/plasma profile для выбранного init. Менеджер входа выбирается отдельно (по умолчанию SDDM).
 
 Init:
