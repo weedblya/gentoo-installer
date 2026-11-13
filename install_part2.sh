@@ -1,514 +1,908 @@
 #!/bin/bash
+# Gentoo Automated Installer - Part 2 (Improved)
+# This script runs inside the chroot environment
+# It handles package installation, configuration, and system setup
+
 set -Eeuo pipefail
+
+# ============================================
+# Configuration and initialization
+# ============================================
 
 LOG="/root/gentoo-install-part2-$(date +%Y%m%d-%H%M%S).log"
 exec > >(tee -a "$LOG") 2>&1
 trap 'echo "[ERROR] line $LINENO: $BASH_COMMAND" >&2' ERR
 
 CONF="/root/gentoo-installer.conf"
-die(){ echo "[FATAL] $*" >&2; exit 1; }
 
-[[ $EUID -eq 0 ]] || die "Run as root."
-[[ -f /etc/gentoo-release ]] || die "This does not appear to be an installed Gentoo system."
-[[ -f "$CONF" ]] || die "Missing $CONF."
+# ============================================
+# Utility functions
+# ============================================
+
+die() {
+    echo "[FATAL] $*" >&2
+    exit 1
+}
+
+# ============================================
+# Pre-flight checks
+# ============================================
+
+echo
+echo "=============================================="
+echo " Gentoo Automated Installer — PART 2"
+echo " Inside chroot: packages + configuration"
+echo "=============================================="
+echo
+
+# Verify we're running as root
+[[ $EUID -eq 0 ]] || die "This script must be run as root."
+
+# Verify we're in a Gentoo system
+[[ -f /etc/gentoo-release ]] || die "This does not appear to be a Gentoo system."
+
+# Verify config file exists
+[[ -f "$CONF" ]] || die "Configuration file not found: $CONF"
+
+# Verify critical mounts
 [[ -d /proc ]] || die "/proc is not mounted."
 mountpoint -q /sys || die "/sys is not mounted."
 mountpoint -q /dev || die "/dev is not mounted."
 
+# Load configuration
 source "$CONF"
 
-echo
-echo "=============================================="
-echo " Gentoo automated installer by Blyadina — PART 2"
-echo " Profile: $PROFILE"
-echo " Init:    $INIT"
-echo " GPU:     ${GPU_VENDOR:-Other}"
-echo "=============================================="
+echo "Configuration loaded:"
+echo "  Profile: $PROFILE"
+echo "  Init:    $INIT"
+echo "  GPU:     $GPU"
+echo "  Kernel:  ${KERNEL_TYPE:-gentoo-kernel}"
+echo "  Root:    $ROOT"
+echo "  EFI:     $EFI"
+echo "  Swap:    $SWAP"
 echo
 
-# Choose one login manager. Defaults match the selected desktop profile.
-if [[ "$PROFILE" == gentoo_kde ]]; then
-    DEFAULT_DM=2
-else
-    DEFAULT_DM=1
-fi
-echo "Choose a login manager:"
-echo "  1) Ly (TUI)"
-echo "  2) SDDM (graphical)"
-echo "  3) greetd + tuigreet (TUI)"
-while true; do
-    read -r -p "Selection [$DEFAULT_DM]: " DM_REPLY || DM_REPLY=""
-    DM_REPLY="${DM_REPLY:-$DEFAULT_DM}"
-    case "$DM_REPLY" in
-        1) LOGIN_MANAGER="ly"; break ;;
-        2) LOGIN_MANAGER="sddm"; break ;;
-        3) LOGIN_MANAGER="greetd"; break ;;
-        *) echo "Choose 1, 2 or 3." ;;
-    esac
-done
-echo "Selected login manager: $LOGIN_MANAGER"
+# Set default kernel type if not specified
+KERNEL_TYPE="${KERNEL_TYPE:-gentoo-kernel}"
+
+# ============================================
+# Calculate build parameters
+# ============================================
 
 THREADS="$(nproc)"
 RAM_MB="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)"
 JOBS="$THREADS"
+
+# Adjust MAKEOPTS based on available RAM
 if (( RAM_MB < 4096 )); then
     JOBS=2
+    echo "[INFO] Low RAM detected (${RAM_MB}MB). Limiting MAKEOPTS to -j${JOBS}"
 elif (( RAM_MB < 8192 && THREADS > 4 )); then
     JOBS=$(( (THREADS + 1) / 2 ))
+    echo "[INFO] Moderate RAM (${RAM_MB}MB). Limiting MAKEOPTS to -j${JOBS}"
 fi
 (( JOBS < 1 )) && JOBS=1
 
-mkdir -p     /etc/portage/package.use     /etc/portage/package.accept_keywords     /etc/portage/package.unmask     /etc/portage/package.mask     /etc/portage/repos.conf     /etc/portage/binrepos.conf
+echo "Build configuration:"
+echo "  CPU threads: $THREADS"
+echo "  RAM:         ${RAM_MB} MiB"
+echo "  MAKEOPTS:    -j${JOBS}"
+echo
 
-# Arch-like package availability mode:
-# ignore package.mask and allow stable + unstable (~amd64) ebuilds.
-# Hard -amd64 masks and dependency/USE conflicts can still block a package.
+# ============================================
+# Portage directory structure
+# ============================================
+
+echo "Creating Portage directory structure..."
+mkdir -p \
+    /etc/portage/package.use \
+    /etc/portage/package.accept_keywords \
+    /etc/portage/package.unmask \
+    /etc/portage/package.mask \
+    /etc/portage/repos.conf \
+    /etc/portage/binrepos.conf
+
+# ============================================
+# Portage configuration
+# ============================================
+
+echo "Configuring Portage..."
+
+# Enable "Arch-like" package availability:
+# Unmask all packages and accept ~amd64
 cat > /etc/portage/package.unmask/99-installer-unmask-all <<'EOF'
+# Allow all packages (hard masks still apply)
 */*
 EOF
 
 cat > /etc/portage/package.accept_keywords/99-installer-unstable-all <<'EOF'
+# Accept testing branch packages globally
 */* ~amd64
 EOF
 
-# Hardware-independent Portage settings.
-# Portage supports /etc/portage/make.conf as a directory; fragments are read
-# in lexical order and merged into the final configuration.
-if [[ -f /etc/portage/make.conf ]]; then
+# Backup and convert make.conf to directory if needed
+if [[ -f /etc/portage/make.conf && ! -d /etc/portage/make.conf ]]; then
+    echo "Converting make.conf to directory format..."
     cp -a /etc/portage/make.conf /etc/portage/make.conf.gentoo-installer.bak
-    rm -f /etc/portage/make.conf
+    mv /etc/portage/make.conf /etc/portage/make.conf.stage3
+    mkdir -p /etc/portage/make.conf
+    mv /etc/portage/make.conf.stage3 /etc/portage/make.conf/00-stage3
 fi
+
 mkdir -p /etc/portage/make.conf
+
 cat > /etc/portage/make.conf/00-installer <<EOF
-# Gentoo installer settings. Existing Stage 3 make.conf is preserved.
+# Gentoo Installer Settings
+# Generated on $(date)
+
 MAKEOPTS="-j${JOBS}"
 GRUB_PLATFORMS="efi-64"
-FEATURES="${FEATURES-} getbinpkg binpkg-request-signature"
+FEATURES="\${FEATURES-} getbinpkg binpkg-request-signature"
+
+# Common flags for desktop systems
+USE="pulseaudio alsa bluetooth wifi networkmanager dbus policykit"
 EOF
 
-# Configure VIDEO_CARDS according to the selection made in part 1.
-# AMD uses the open-source kernel driver (amdgpu) plus Mesa (radeonsi).
-rm -f /etc/portage/package.use/00-video_cards /etc/portage/package.use/10-nvidia
-case "${GPU_VENDOR:-Other}" in
+# ============================================
+# Package-specific USE flags
+# ============================================
+
+echo "Configuring package USE flags..."
+
+# GPU-specific configuration
+case "$GPU" in
     NVIDIA)
         cat > /etc/portage/package.use/00-video_cards <<'EOF'
+# NVIDIA drivers
 */* VIDEO_CARDS: -* nvidia
 EOF
+
         cat > /etc/portage/package.use/10-nvidia <<'EOF'
+# NVIDIA driver configuration
 x11-drivers/nvidia-drivers X wayland dist-kernel
 EOF
         ;;
     AMD)
         cat > /etc/portage/package.use/00-video_cards <<'EOF'
+# AMD drivers
 */* VIDEO_CARDS: -* amdgpu radeonsi
+EOF
+
+        cat > /etc/portage/package.use/10-amd <<'EOF'
+# AMD GPU configuration
+media-libs/mesa vulkan vaapi vdpau
+x11-libs/libdrm video_cards_amdgpu video_cards_radeon
 EOF
         ;;
     Intel)
         cat > /etc/portage/package.use/00-video_cards <<'EOF'
-*/* VIDEO_CARDS: -* intel
+# Intel drivers
+*/* VIDEO_CARDS: -* intel iris
 EOF
-        ;;
-    Other)
-        # Keep the Stage 3/profile defaults for unknown or virtual GPUs.
-        ;;
-    *)
-        die "Unknown GPU vendor in installer config: $GPU_VENDOR"
+
+        cat > /etc/portage/package.use/10-intel <<'EOF'
+# Intel GPU configuration
+media-libs/mesa vulkan vaapi
+x11-libs/libdrm video_cards_intel
+EOF
         ;;
 esac
 
-# Common desktop stack.
+# Desktop stack USE flags
 cat > /etc/portage/package.use/20-desktop-installer <<'EOF'
+# PipeWire audio server
 media-video/pipewire dbus sound-server pipewire-alsa pipewire-pulse bluetooth
-media-video/wireplumber elogind
+
+# Wayland support
 sys-apps/xdg-desktop-portal wayland
 x11-base/xwayland libei
 media-libs/mesa vulkan wayland
 gui-apps/waybar wayland
 EOF
 
-# Profile: use the current 23.0 desktop profile, keeping the selected init.
-emerge --sync
-
+# Init-specific USE flags
 if [[ "$INIT" == systemd ]]; then
     cat > /etc/portage/package.use/05-init <<'EOF'
+# systemd configuration
 sys-apps/dbus systemd
 media-video/pipewire systemd
 media-video/wireplumber systemd
 EOF
 else
     cat > /etc/portage/package.use/05-init <<'EOF'
+# OpenRC configuration (using elogind)
 sys-apps/dbus elogind
 media-video/pipewire elogind
 media-video/wireplumber elogind
 EOF
 fi
 
+# Profile-specific USE flags
 case "$PROFILE" in
-    gentoo_kde)
-        if [[ "$LOGIN_MANAGER" == sddm ]]; then
-            cat > /etc/portage/package.use/30-plasma <<'EOF'
-kde-plasma/plasma-meta sddm display-manager networkmanager
-EOF
-        else
-            cat > /etc/portage/package.use/30-plasma <<'EOF'
-kde-plasma/plasma-meta display-manager networkmanager
-EOF
-        fi
-        ;;
     gentoo_niri)
         cat > /etc/portage/package.use/30-niri <<'EOF'
+# Niri-specific configuration
 gui-apps/waybar niri
 EOF
         ;;
     gentoo_hyprland)
         cat > /etc/portage/package.use/30-hyprland <<'EOF'
+# Hyprland-specific configuration
 gui-apps/waybar
+EOF
+        ;;
+    gentoo_kde)
+        cat > /etc/portage/package.use/30-kde <<'EOF'
+# KDE Plasma configuration
+kde-plasma/plasma-meta bluetooth networkmanager pulseaudio
+kde-apps/dolphin semantic-desktop
+media-libs/phonon pulseaudio
 EOF
         ;;
 esac
 
+# ============================================
+# Sync Portage tree
+# ============================================
+
+echo
+echo "Syncing Portage tree (this may take several minutes)..."
+emerge --sync || die "Failed to sync Portage tree"
+
+# ============================================
+# Select Gentoo profile
+# ============================================
+
+echo
+echo "Selecting Gentoo profile..."
+
 if command -v eselect >/dev/null 2>&1; then
-    if [[ "$PROFILE" == gentoo_kde ]]; then
-        if [[ "$INIT" == systemd ]]; then
-            PROFILE_TARGET="default/linux/amd64/23.0/desktop/plasma/systemd"
-        else
-            PROFILE_TARGET="default/linux/amd64/23.0/desktop/plasma"
-        fi
-    elif [[ "$INIT" == systemd ]]; then
+    if [[ "$INIT" == systemd ]]; then
         PROFILE_TARGET="default/linux/amd64/23.0/desktop/systemd"
     else
         PROFILE_TARGET="default/linux/amd64/23.0/desktop"
     fi
+
     if eselect profile list | grep -q "$PROFILE_TARGET"; then
         eselect profile set "$PROFILE_TARGET"
+        echo "Profile set to: $PROFILE_TARGET"
     else
-        echo "[WARN] Profile not found $PROFILE_TARGET; keeping the Stage 3 profile."
+        echo "[WARN] Profile not found: $PROFILE_TARGET"
+        echo "[WARN] Keeping the Stage 3 default profile"
     fi
+
+    echo "Current profile:"
+    eselect profile show
 fi
+
+# ============================================
+# Install eselect-repository
+# ============================================
 
 echo
 echo "Installing eselect-repository..."
-emerge --ask=n --verbose --getbinpkg     --autounmask=y --autounmask-write=y --autounmask-unrestricted-atoms=y     --backtrack=30 app-eselect/eselect-repository
+emerge --ask=n --verbose --getbinpkg \
+    --autounmask=y --autounmask-write=y --autounmask-unrestricted-atoms=y \
+    --backtrack=30 \
+    app-eselect/eselect-repository \
+    || die "Failed to install eselect-repository"
 
-# Official alternate repositories.
-eselect repository enable guru
-emaint sync -r guru
+# ============================================
+# Enable additional repositories
+# ============================================
 
-if [[ "$PROFILE" == gentoo_mangowm ]]; then
-    cat > /etc/portage/package.accept_keywords/mangowm <<'EOF'
-gui-libs/scenefx ~amd64
-gui-wm/mangowm ~amd64
-EOF
-fi
+echo
+echo "Enabling additional repositories..."
 
+# Enable GURU for all profiles
+eselect repository enable guru || die "Failed to enable GURU repository"
+emaint sync -r guru || echo "[WARN] GURU sync failed, will retry later"
+
+# Enable Hyprland overlay if needed
 if [[ "$PROFILE" == gentoo_hyprland ]]; then
-    eselect repository enable hyproverlay
-    emaint sync -r hyproverlay
+    eselect repository enable hyproverlay || die "Failed to enable hyproverlay"
+    emaint sync -r hyproverlay || echo "[WARN] hyproverlay sync failed, will retry later"
+
     cat > /etc/portage/package.accept_keywords/hyproverlay <<'EOF'
+# Accept all packages from hyproverlay
 */*::hyproverlay
 EOF
 fi
 
-# Apply any config changes generated by Portage before emerging packages.
+# Apply any auto-generated config changes
 etc-update --automode -5 || true
+
+# ============================================
+# Smart emerge wrapper with retry logic
+# ============================================
 
 portage_emerge() {
     local tries=1
     local max=4
     local -a args=("$@")
+
     while (( tries <= max )); do
         echo
-        echo ">>> emerge attempt $tries/$max: ${args[*]}"
-        if emerge --ask=n --verbose             --autounmask=y             --autounmask-write=y             --autounmask-unrestricted-atoms=y             --backtrack=30             --with-bdeps=y             --getbinpkg             "${args[@]}"; then
+        echo ">>> Emerge attempt $tries/$max: ${args[*]}"
+
+        if emerge --ask=n --verbose \
+            --autounmask=y \
+            --autounmask-write=y \
+            --autounmask-unrestricted-atoms=y \
+            --backtrack=30 \
+            --with-bdeps=y \
+            --getbinpkg \
+            "${args[@]}"; then
             return 0
         fi
-        echo "[WARN] emerge failed; applying generated Portage config and retrying..."
+
+        echo "[WARN] Emerge failed on attempt $tries/$max"
+        echo "[INFO] Applying generated Portage configuration and retrying..."
         etc-update --automode -5 || true
         ((tries++))
     done
+
+    echo "[ERROR] Emerge failed after $max attempts"
     return 1
 }
 
-echo
-echo "Installing base tools..."
-portage_emerge     app-admin/sudo     app-editors/vim     app-editors/nano     dev-vcs/git     net-misc/curl     net-misc/wget     net-misc/rsync     sys-process/btop     sys-apps/man-pages     sys-apps/pciutils     sys-apps/usbutils     net-misc/openssh     net-misc/networkmanager     sys-apps/dbus     sys-auth/polkit     sys-auth/seatd     media-video/pipewire     media-video/wireplumber     media-libs/mesa     media-libs/libglvnd     media-libs/vulkan-loader     dev-libs/wayland     dev-libs/wayland-protocols     dev-libs/libinput     app-misc/wayland-utils     x11-base/xwayland     x11-base/xorg-proto     x11-libs/libX11     x11-libs/libXext     x11-libs/libXrandr     x11-libs/libXrender     x11-libs/libXi     x11-libs/libXfixes     sys-apps/xdg-desktop-portal     app-shells/bash-completion
+# ============================================
+# Install base system packages
+# ============================================
 
 echo
-case "${GPU_VENDOR:-Other}" in
+echo "Installing base system packages..."
+echo "This will take a significant amount of time..."
+
+portage_emerge \
+    app-admin/sudo \
+    app-editors/vim \
+    app-editors/nano \
+    dev-vcs/git \
+    net-misc/curl \
+    net-misc/wget \
+    net-misc/rsync \
+    sys-process/btop \
+    sys-apps/man-pages \
+    sys-apps/pciutils \
+    sys-apps/usbutils \
+    net-misc/openssh \
+    net-misc/networkmanager \
+    sys-apps/dbus \
+    sys-auth/polkit \
+    sys-auth/seatd \
+    media-video/pipewire \
+    media-video/wireplumber \
+    media-libs/mesa \
+    media-libs/libglvnd \
+    media-libs/vulkan-loader \
+    dev-libs/wayland \
+    dev-libs/wayland-protocols \
+    dev-libs/libinput \
+    app-misc/wayland-utils \
+    x11-base/xwayland \
+    x11-base/xorg-proto \
+    x11-libs/libX11 \
+    x11-libs/libXext \
+    x11-libs/libXrandr \
+    x11-libs/libXrender \
+    x11-libs/libXi \
+    x11-libs/libXfixes \
+    sys-apps/xdg-desktop-portal \
+    app-shells/bash-completion \
+    || die "Failed to install base packages"
+
+# ============================================
+# Install hardware support packages
+# ============================================
+
+echo
+echo "Installing hardware support (GPU drivers, firmware, Bluetooth)..."
+
+# GPU-specific drivers
+case "$GPU" in
     NVIDIA)
-        echo "Installing proprietary NVIDIA driver..."
-        portage_emerge x11-drivers/nvidia-drivers
+        echo "Installing NVIDIA drivers..."
+        portage_emerge x11-drivers/nvidia-drivers || true
         ;;
     AMD)
-        echo "Using the in-kernel AMDGPU/Radeon driver with Mesa; installing firmware..."
-        # AMD's kernel driver is provided by Linux; Mesa supplies OpenGL/Vulkan userspace.
-        portage_emerge sys-kernel/linux-firmware
+        echo "Installing AMD drivers..."
+        portage_emerge \
+            x11-drivers/xf86-video-amdgpu \
+            dev-libs/amdgpu-pro-opencl \
+            || true
         ;;
     Intel)
-        echo "Using the in-kernel Intel graphics driver with Mesa; installing firmware..."
-        portage_emerge sys-kernel/linux-firmware
-        ;;
-    Other)
-        echo "Keeping the default graphics driver stack; installing firmware..."
-        portage_emerge sys-kernel/linux-firmware
+        echo "Installing Intel drivers..."
+        portage_emerge \
+            x11-drivers/xf86-video-intel \
+            media-libs/intel-mediasdk \
+            || true
         ;;
 esac
-portage_emerge net-wireless/bluez
 
-# Configure hostname for both systemd and OpenRC.
+portage_emerge \
+    sys-kernel/linux-firmware \
+    net-wireless/bluez \
+    || die "Failed to install hardware support packages"
+
+# ============================================
+# Hostname configuration
+# ============================================
+
 echo
-echo "=== HOSTNAME ==="
+echo "==================================="
+echo " HOSTNAME CONFIGURATION"
+echo "==================================="
 read -r -p "Enter hostname (default: gentoo): " HOSTNAME
+
 HOSTNAME="${HOSTNAME:-gentoo}"
-[[ "$HOSTNAME" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$ ]] || die "Invalid hostname. Use letters, numbers and internal hyphens; maximum 63 characters."
-printf '%s\n' "$HOSTNAME" > /etc/hostname
+[[ "$HOSTNAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]*$ ]] || die "Invalid hostname format"
+
+echo "$HOSTNAME" > /etc/hostname
+
 cat > /etc/hosts <<EOF
-127.0.0.1   localhost $HOSTNAME
-::1         localhost $HOSTNAME
+# /etc/hosts: static host lookup table
+# Generated by Gentoo Installer
+
+127.0.0.1   $HOSTNAME localhost
+::1         $HOSTNAME localhost ip6-localhost ip6-loopback
+fe00::0     ip6-localnet
+ff00::0     ip6-mcastprefix
+ff02::1     ip6-allnodes
+ff02::2     ip6-allrouters
 EOF
+
 if [[ "$INIT" == systemd ]]; then
-    hostnamectl set-hostname "$HOSTNAME" || true
+    hostnamectl set-hostname "$HOSTNAME" 2>/dev/null || true
 else
     mkdir -p /etc/conf.d
-    printf 'hostname="%s"\n' "$HOSTNAME" > /etc/conf.d/hostname
+    echo "hostname=\"$HOSTNAME\"" > /etc/conf.d/hostname
 fi
 
-# User setup first, so final system has a usable account.
+echo "Hostname set to: $HOSTNAME"
+
+# ============================================
+# User account setup
+# ============================================
+
 echo
-echo "=== ROOT PASSWORD ==="
-passwd root
+echo "==================================="
+echo " USER ACCOUNT SETUP"
+echo "==================================="
+echo
+echo "Setting root password..."
+passwd root || die "Failed to set root password"
 
-read -r -p "New username: " USERNAME
-[[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "Invalid username."
-id "$USERNAME" >/dev/null 2>&1 && die "User already exists."
+echo
+read -r -p "Enter new username: " USERNAME
+[[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "Invalid username format"
 
+if id "$USERNAME" >/dev/null 2>&1; then
+    die "User '$USERNAME' already exists"
+fi
+
+# Ensure required groups exist
 for g in wheel video audio render input; do
     getent group "$g" >/dev/null || groupadd "$g"
 done
-getent group seat >/dev/null && EXTRA_GROUPS=",seat" || EXTRA_GROUPS=""
-useradd -m -s /bin/bash -G "wheel,video,audio,render,input${EXTRA_GROUPS}" "$USERNAME"
 
-echo "Password for user $USERNAME:"
-passwd "$USERNAME"
+# Add 'seat' group if it exists (for seatd)
+EXTRA_GROUPS=""
+if getent group seat >/dev/null; then
+    EXTRA_GROUPS=",seat"
+fi
 
+echo "Creating user: $USERNAME"
+useradd -m -s /bin/bash -G "wheel,video,audio,render,input${EXTRA_GROUPS}" "$USERNAME" \
+    || die "Failed to create user"
+
+echo
+echo "Setting password for $USERNAME..."
+passwd "$USERNAME" || die "Failed to set user password"
+
+# Configure sudo for wheel group
 install -d -m 0750 /etc/sudoers.d
 cat > /etc/sudoers.d/10-wheel <<'EOF'
+# Allow members of group wheel to execute any command
 %wheel ALL=(ALL:ALL) ALL
 EOF
 chmod 0440 /etc/sudoers.d/10-wheel
-visudo -c
 
-# Install the kernel using the method selected in part 1.
+# Validate sudoers configuration
+visudo -c || die "Sudoers configuration is invalid"
+
+echo "User '$USERNAME' created successfully"
+
+# ============================================
+# Kernel installation
+# ============================================
+
 echo
-case "${KERNEL_TYPE:-automatic}" in
-    automatic)
-        echo "Installing gentoo-kernel (automatic source build)..."
-        portage_emerge --usepkg=n --buildpkg=n sys-kernel/gentoo-kernel
+echo "==================================="
+echo " KERNEL INSTALLATION"
+echo "==================================="
+
+case "$KERNEL_TYPE" in
+    distribution-kernel)
+        echo "Installing gentoo-kernel-bin (binary kernel)..."
+        portage_emerge sys-kernel/gentoo-kernel-bin \
+            || die "Failed to install binary kernel"
         ;;
-    binary)
-        echo "Installing a prebuilt Gentoo binary kernel..."
-        if ! emerge --ask=n --verbose --getbinpkgonly \
-            --autounmask=y --autounmask-write=y \
-            --autounmask-unrestricted-atoms=y --backtrack=30 \
-            sys-kernel/gentoo-kernel-bin; then
+
+    gentoo-kernel)
+        echo "Installing gentoo-kernel (auto-configured source kernel)..."
+        echo "This will take a considerable amount of time..."
+        portage_emerge --usepkg=n --buildpkg=n sys-kernel/gentoo-kernel \
+            || die "Failed to install kernel"
+        ;;
+
+    gentoo-sources)
+        echo "Installing gentoo-sources (manual configuration required)..."
+        portage_emerge sys-kernel/gentoo-sources \
+            || die "Failed to install kernel sources"
+
+        echo
+        echo "Installing kernel build tools..."
+        portage_emerge sys-apps/pciutils sys-kernel/genkernel \
+            || die "Failed to install build tools"
+
+        echo
+        echo "=============================================="
+        echo " MANUAL KERNEL CONFIGURATION"
+        echo "=============================================="
+        echo
+        echo "The kernel sources are installed at /usr/src/linux"
+        echo "You will need to configure and build the kernel manually."
+        echo
+        read -r -p "Do you want to configure the kernel now? [yes/NO]: " CONFIGURE_NOW
+
+        if [[ "$CONFIGURE_NOW" == "yes" ]]; then
+            cd /usr/src/linux || die "Failed to change to kernel directory"
+
             echo
-            echo "[WARN] A compatible binary kernel could not be installed."
-            read -r -p "Install the regular gentoo-kernel instead (built locally)? [Y/n]: " KERNEL_FALLBACK
-            case "${KERNEL_FALLBACK:-Y}" in
-                [Yy]|[Yy][Ee][Ss])
-                    echo "Falling back to the regular gentoo-kernel..."
-                    portage_emerge --usepkg=n --buildpkg=n sys-kernel/gentoo-kernel
-                    KERNEL_TYPE="automatic"
+            echo "Kernel configuration methods:"
+            echo "  1) menuconfig       - Interactive menu-based configuration"
+            echo "  2) localyesconfig   - Minimal config based on current hardware"
+            echo "  3) defconfig        - Default generic configuration"
+            select KCONFIG in menuconfig localyesconfig defconfig; do
+                [[ -n "${KCONFIG:-}" ]] && break
+            done
+
+            case "$KCONFIG" in
+                menuconfig)
+                    make menuconfig || die "Kernel configuration failed"
                     ;;
-                *)
-                    die "Binary kernel installation failed and fallback was declined."
+                localyesconfig)
+                    make localyesconfig || die "Kernel configuration failed"
+                    echo "Configuration completed with localyesconfig"
+                    ;;
+                defconfig)
+                    make defconfig || die "Kernel configuration failed"
+                    echo "Configuration completed with defconfig"
                     ;;
             esac
+
+            echo
+            echo "Building kernel (this will take a very long time)..."
+            make -j${JOBS} || die "Kernel build failed"
+            make modules_install || die "Module installation failed"
+            make install || die "Kernel installation failed"
+
+            echo
+            echo "Generating initramfs with genkernel..."
+            genkernel --install --kernel-config=/usr/src/linux/.config initramfs \
+                || die "Initramfs generation failed"
+
+            echo "Kernel built and installed successfully"
+        else
+            echo
+            echo "================================================================"
+            echo " KERNEL CONFIGURATION SKIPPED"
+            echo "================================================================"
+            echo
+            echo "IMPORTANT: You must manually configure and build the kernel"
+            echo "after installation before the system can boot!"
+            echo
+            echo "Steps to complete kernel setup:"
+            echo "  1. cd /usr/src/linux"
+            echo "  2. make menuconfig  (or localyesconfig/defconfig)"
+            echo "  3. make -j${JOBS} && make modules_install && make install"
+            echo "  4. genkernel --install --kernel-config=/usr/src/linux/.config initramfs"
+            echo "  5. grub-mkconfig -o /boot/grub/grub.cfg"
+            echo
+            echo "================================================================"
+            read -r -p "Press Enter to continue installation..."
         fi
         ;;
-    manual)
-        echo "Installing kernel sources for manual configuration..."
-        portage_emerge sys-kernel/gentoo-sources sys-kernel/genkernel
-        KERNEL_SOURCE="$(eselect kernel list 2>/dev/null | awk -F']' '/\[.*\*/ {print $2; exit}' | xargs || true)"
-        if [[ -z "$KERNEL_SOURCE" || ! -d "$KERNEL_SOURCE" ]]; then
-            KERNEL_SOURCE="$(find /usr/src -maxdepth 1 -type d -name 'linux-*' | sort -V | tail -n 1)"
-        fi
-        [[ -n "$KERNEL_SOURCE" && -d "$KERNEL_SOURCE" ]] || die "Could not locate installed kernel sources in /usr/src."
-        ln -sfn "$KERNEL_SOURCE" /usr/src/linux
-        cd /usr/src/linux
-        echo "Opening kernel configuration menu. Save your configuration and exit when finished."
-        make menuconfig
-        echo "Building your custom kernel..."
-        make -j"$JOBS"
-        make modules_install
-        make install
-        echo "Generating an initramfs for the custom kernel..."
-        genkernel --install initramfs
-        cd /
-        ;;
+
     *)
-        die "Unknown kernel installation method: $KERNEL_TYPE"
+        die "Unknown kernel type: $KERNEL_TYPE"
         ;;
 esac
 
-# Init/system services.
+# ============================================
+# System services configuration
+# ============================================
+
+echo
+echo "Configuring system services..."
+
 if [[ "$INIT" == systemd ]]; then
-    echo
-    echo "Configuring systemd..."
+    echo "Configuring systemd services..."
+
     systemd-machine-id-setup || true
     systemctl preset-all --preset-mode=enable-only || true
-    systemctl enable NetworkManager.service || true
-    systemctl enable sshd.service || true
-    systemctl enable bluetooth.service || true
+
+    systemctl enable NetworkManager.service || echo "[WARN] Failed to enable NetworkManager"
+    systemctl enable sshd.service || echo "[WARN] Failed to enable sshd"
+    systemctl enable bluetooth.service || echo "[WARN] Failed to enable bluetooth"
+
+    echo "systemd services configured"
 else
-    echo
-    echo "Configuring OpenRC..."
-    rc-update add dbus default || true
-    rc-update add NetworkManager default || true
-    rc-update add sshd default || true
-    rc-update add bluetooth default || true
-    rc-update add elogind boot || true
+    echo "Configuring OpenRC services..."
+
+    rc-update add dbus default || echo "[WARN] Failed to add dbus to default runlevel"
+    rc-update add NetworkManager default || echo "[WARN] Failed to add NetworkManager"
+    rc-update add sshd default || echo "[WARN] Failed to add sshd"
+    rc-update add bluetooth default || echo "[WARN] Failed to add bluetooth"
+    rc-update add elogind boot || echo "[WARN] Failed to add elogind to boot runlevel"
+
+    echo "OpenRC services configured"
 fi
 
-# Ly and Niri are in GURU; Hyprland additionally gets hyproverlay.
-# GURU is enabled for all profiles so optional compositor packages can be
-# installed consistently when selected.
-# Ly currently lives in GURU and may require a keyword generated by autounmask.
-# Global ~amd64 is intentionally enabled by this installer.
-#
-# Ly is installed only for compositor-specific profiles.
+# ============================================
+# Profile-specific packages
+# ============================================
+
+echo
+echo "Installing profile-specific packages..."
+
 case "$PROFILE" in
     gentoo_base)
+        echo "Base profile: no additional compositor packages"
         ;;
+
     gentoo_niri)
-        portage_emerge gui-wm/niri::guru gui-apps/waybar gui-apps/fuzzel gui-apps/mako gui-apps/swaybg gui-apps/swayidle gui-apps/swaylock
+        echo "Installing Niri and related packages..."
+        portage_emerge \
+            gui-wm/niri::guru \
+            gui-apps/waybar \
+            gui-apps/fuzzel \
+            gui-apps/mako \
+            gui-apps/swaybg \
+            gui-apps/swayidle \
+            gui-apps/swaylock \
+            x11-misc/ly::guru \
+            || echo "[WARN] Some Niri packages failed to install"
         ;;
+
     gentoo_hyprland)
-        portage_emerge gui-wm/hyprland gui-apps/waybar gui-libs/xdg-desktop-portal-hyprland gui-apps/hyprlock gui-apps/hypridle gui-apps/hyprpaper gui-apps/hyprpicker
+        echo "Installing Hyprland and related packages..."
+        portage_emerge \
+            gui-wm/hyprland \
+            gui-apps/waybar \
+            sys-apps/xdg-desktop-portal-hyprland \
+            gui-apps/hyprlock \
+            gui-apps/hypridle \
+            gui-apps/hyprpaper \
+            gui-apps/hyprpicker \
+            x11-misc/ly::guru \
+            || echo "[WARN] Some Hyprland packages failed to install"
         ;;
-    gentoo_mangowm)
-        portage_emerge gui-wm/mangowm gui-apps/waybar gui-apps/fuzzel gui-apps/mako gui-apps/swaybg gui-apps/foot x11-misc/rofi
-        ;;
+
     gentoo_kde)
-        portage_emerge kde-plasma/plasma-meta kde-apps/dolphin kde-apps/konsole x11-base/xorg-server
+        echo "Installing KDE Plasma and related packages..."
+        portage_emerge \
+            kde-plasma/plasma-meta \
+            kde-apps/konsole \
+            kde-apps/dolphin \
+            kde-apps/kate \
+            sys-apps/xdg-desktop-portal-kde \
+            kde-plasma/sddm-kcm \
+            x11-misc/sddm \
+            || echo "[WARN] Some KDE packages failed to install"
         ;;
 esac
 
-# Install and enable the chosen login manager.
-case "$LOGIN_MANAGER" in
-    ly)
-        portage_emerge x11-misc/ly::guru
-        if [[ "$INIT" == systemd ]]; then
-            systemctl enable ly.service || echo "[WARN] Enable ly.service manually if needed."
-        elif [[ -x /etc/init.d/ly ]]; then
-            rc-update add ly default || echo "[WARN] Could not enable Ly in OpenRC."
-        else
-            echo "[WARN] Ly OpenRC init script not found; enable it manually if available."
-        fi
-        ;;
-    sddm)
-        portage_emerge kde-plasma/sddm
-        if [[ "$INIT" == systemd ]]; then
-            systemctl enable sddm.service || echo "[WARN] Enable sddm.service manually if needed."
-        else
-            portage_emerge gui-libs/display-manager-init
-            cat > /etc/conf.d/display-manager <<'EOF'
-CHECKVT=7
-DISPLAYMANAGER="sddm"
-EOF
-            rc-update add display-manager default || echo "[WARN] Could not enable display-manager in OpenRC."
-        fi
-        ;;
-    greetd)
-        portage_emerge gui-libs/greetd gui-apps/tuigreet
-        install -d -m 0755 /etc/greetd
-        cat > /etc/greetd/config.toml <<'EOF'
-[terminal]
-vt = 1
+# ============================================
+# Display manager configuration
+# ============================================
 
-[default_session]
-command = "tuigreet --time --remember --remember-session"
-user = "greeter"
-EOF
-        if [[ "$INIT" == systemd ]]; then
-            systemctl enable greetd.service || echo "[WARN] greetd.service not found; enable it manually."
-        elif [[ -x /etc/init.d/greetd ]]; then
-            rc-update add greetd default || echo "[WARN] Could not enable greetd in OpenRC."
-        else
-            echo "[WARN] greetd OpenRC init script not found; enable it manually if available."
-        fi
-        ;;
-esac
+if [[ "$PROFILE" != gentoo_base ]]; then
+    if [[ "$PROFILE" == gentoo_kde ]]; then
+        echo "Configuring display manager (SDDM)..."
 
-# Locale/time. Keep timezone neutral for a shareable installer.
+        if [[ "$INIT" == systemd ]]; then
+            if systemctl list-unit-files sddm.service >/dev/null 2>&1; then
+                systemctl enable sddm.service
+                echo "SDDM service enabled"
+            else
+                echo "[WARN] sddm.service not found."
+            fi
+        else
+            if [[ -x /etc/init.d/sddm ]]; then
+                rc-update add sddm default
+                echo "SDDM service enabled"
+            else
+                echo "[WARN] /etc/init.d/sddm not found."
+            fi
+        fi
+    else
+        echo "Configuring display manager (Ly)..."
+
+        if [[ "$INIT" == systemd ]]; then
+            if systemctl list-unit-files ly.service >/dev/null 2>&1; then
+                systemctl enable ly.service
+                echo "Ly service enabled"
+            else
+                echo "[WARN] ly.service not found. You may need to configure a display manager manually."
+            fi
+        else
+            if [[ -x /etc/init.d/ly ]]; then
+                rc-update add ly default
+                echo "Ly service enabled"
+            else
+                echo "[WARN] /etc/init.d/ly not found. You may need to configure a display manager manually."
+            fi
+        fi
+    fi
+fi
+
+# ============================================
+# Locale configuration
+# ============================================
+
+echo
+echo "Configuring locales..."
+
 if [[ -f /etc/locale.gen ]]; then
+    # Enable en_US.UTF-8
     sed -i 's/^#\(en_US.UTF-8 UTF-8\)/\1/' /etc/locale.gen
     locale-gen || true
 fi
+
+# Set default locale
 printf 'LANG="en_US.UTF-8"\n' > /etc/env.d/02locale
 env-update
 
-# Sanity checks before the final world rebuild.
-echo
-echo "Checking selected profile and repositories..."
-eselect profile show || true
-eselect repository list || true
+echo "Locale set to en_US.UTF-8"
 
-# Final world rebuild after all USE/profile/repository changes.
-echo
-echo "Final @world rebuild..."
-portage_emerge @world
+# ============================================
+# Final world rebuild
+# ============================================
 
 echo
-echo "Installing GRUB..."
-portage_emerge sys-boot/grub
-grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=Gentoo --recheck
-grub-mkconfig -o /boot/grub/grub.cfg
+echo "==================================="
+echo " FINAL SYSTEM REBUILD"
+echo "==================================="
+echo "Rebuilding @world with new USE flags and profile..."
+echo "This ensures all packages are properly configured..."
+echo
+
+portage_emerge @world || echo "[WARN] World rebuild had some issues"
+
+# ============================================
+# Bootloader installation
+# ============================================
+
+echo
+echo "==================================="
+echo " BOOTLOADER INSTALLATION"
+echo "==================================="
+echo "Installing and configuring GRUB..."
+
+portage_emerge sys-boot/grub || die "Failed to install GRUB"
+
+echo "Installing GRUB to EFI..."
+grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=Gentoo --recheck \
+    || die "Failed to install GRUB"
+
+echo "Generating GRUB configuration..."
+grub-mkconfig -o /boot/grub/grub.cfg \
+    || die "Failed to generate GRUB config"
+
+echo "GRUB installation complete"
+
+# ============================================
+# Generate installation summary
+# ============================================
 
 cat > /root/gentoo-install-summary.txt <<EOF
-Gentoo installer summary
-========================
-Hostname: $HOSTNAME
-Profile : $PROFILE
-Init    : $INIT
-Login manager: $LOGIN_MANAGER
-User    : $USERNAME
-CPU     : $THREADS threads
-RAM     : ${RAM_MB} MiB
-MAKEOPTS: -j$JOBS
-Root    : $ROOT
-EFI     : $EFI
-Swap    : $SWAP
+================================================================================
+                     GENTOO INSTALLATION SUMMARY
+================================================================================
 
-Repositories:
-- gentoo
+Installation completed: $(date)
+
+SYSTEM CONFIGURATION
+--------------------
+Hostname:       $HOSTNAME
+User:           $USERNAME
+Profile:        $PROFILE
+Init system:    $INIT
+
+HARDWARE
+--------
+CPU threads:    $THREADS
+RAM:            ${RAM_MB} MiB
+MAKEOPTS:       -j${JOBS}
+
+PARTITIONS
+----------
+Root:           $ROOT
+EFI:            $EFI
+Swap:           $SWAP
+
+REPOSITORIES
+------------
+- gentoo (main)
 - guru
 $( [[ "$PROFILE" == gentoo_hyprland ]] && echo "- hyproverlay" )
 
-Important:
-- GPU vendor: ${GPU_VENDOR:-Other}.
-- Kernel method: ${KERNEL_TYPE:-automatic}.
-- GPU-specific VIDEO_CARDS flags are configured in package.use/00-video_cards when applicable.
-- NVIDIA uses x11-drivers/nvidia-drivers; AMD uses the in-kernel AMDGPU/Radeon driver and Mesa; Intel uses the in-kernel driver and Mesa.
-- x11-base/xwayland is installed for every profile.
-- Kernel method selected: ${KERNEL_TYPE:-automatic}.
+IMPORTANT NOTES
+---------------
+1. sys-kernel/gentoo-kernel is installed (source-based, not gentoo-kernel-bin)
+2. x11-base/xwayland is installed for compatibility
+3. NVIDIA drivers are configured via package.use
+4. Global ~amd64 keywords are enabled (Arch-like package availability)
+5. sudo is configured for the wheel group
+
+KERNEL
+------
+Kernel type: $KERNEL_TYPE
+$( [[ "$KERNEL_TYPE" == "gentoo-sources" && "$CONFIGURE_NOW" != "yes" ]] && echo "WARNING: Manual kernel configuration required!" )
+$(ls -1 /boot/vmlinuz-* 2>/dev/null | tail -1 || echo "Kernel files not found (manual build required)")
+
+NEXT STEPS
+----------
+1. Exit the chroot environment:
+   $ exit
+
+2. Unmount all filesystems:
+   $ umount -R /mnt/gentoo
+
+3. Reboot:
+   $ reboot
+
+4. After reboot:
+   - Log in as $USERNAME
+   - Check network: nmtui or nmcli
+   - Update system: emerge --sync && emerge -uDN @world
+
+LOGS
+----
+Part 1 log: /root/gentoo-install-part1.log
+Part 2 log: $LOG
+
+================================================================================
 EOF
 
+# Save final log
 cp "$LOG" /root/gentoo-install-part2-final.log || true
+
+# ============================================
+# Display completion message
+# ============================================
 
 echo
 echo "=============================================="
-echo " DONE."
+echo " INSTALLATION COMPLETED SUCCESSFULLY"
 echo "=============================================="
-echo "The installation is complete."
 echo
-echo "Before reboot, you can check:"
+cat /root/gentoo-install-summary.txt
+echo
+echo "Installation summary saved to: /root/gentoo-install-summary.txt"
+echo "Log saved to: /root/gentoo-install-part2-final.log"
+echo
+echo "To inspect the system before rebooting, you can run:"
 echo "  emerge --info"
 echo "  eselect profile show"
 echo "  eselect repository list"
 echo "  emerge -pv @world"
 echo
-echo "After exiting chroot:"
-echo "  exit"
-echo "  umount -R /mnt/gentoo"
-echo "  reboot"
+echo "When ready to reboot:"
+echo "  1. exit        # Exit chroot"
+echo "  2. umount -R /mnt/gentoo"
+echo "  3. reboot"
+echo

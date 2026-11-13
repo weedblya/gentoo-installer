@@ -1,116 +1,68 @@
-# Gentoo Install Scripts
+# Gentoo Installer / Установщик Gentoo
 
-Автоматизированная установка Gentoo AMD64 из Gentoo Live ISO.
+<div align="center">
 
-> ⚠️ **ВНИМАНИЕ:** установщик умеет полностью стирать выбранный диск. Перед запуском внимательно проверьте `lsblk` и выбранный диск.
+[![EN](https://img.shields.io/badge/lang-English-blue.svg)](#english)
+[![RU](https://img.shields.io/badge/язык-Русский-red.svg)](#русский)
 
-## Что устанавливается
+</div>
 
-Есть два этапа:
+---
 
-- `install_part1.sh` — выполняется в Gentoo Live ISO **до chroot**.
-- `install_part2.sh` — выполняется вручную **внутри chroot**.
+## English
 
-Профили:
+### 📋 Description
 
-- `gentoo_base` — базовая desktop-ready система без привязки к WM/DE; X11/Wayland и XWayland.
-- `gentoo_niri` — база + Niri, Waybar, fuzzel, mako, swaybg, swayidle и swaylock; менеджер входа выбирается отдельно.
-- `gentoo_hyprland` — база + Hyprland, Waybar, portal Hyprland, hyprlock, hypridle, hyprpaper и hyprpicker; менеджер входа выбирается отдельно.
-- `gentoo_mangowm` — база + MangoWM, Waybar, fuzzel, mako, swaybg, foot и rofi; менеджер входа выбирается отдельно. MangoWM и SceneFX устанавливаются из GURU с `~amd64`.
-- `gentoo_kde` — KDE Plasma 6, Dolphin и Konsole; использует отдельный Gentoo desktop/plasma profile для выбранного init. Менеджер входа выбирается отдельно (по умолчанию SDDM).
+Automated Gentoo Linux installer scripts inspired by archinstall. These scripts simplify the Gentoo installation process by automating partitioning, Stage 3 extraction, package installation, and system configuration.
 
-Init:
+### ✨ Features
 
-- systemd
-- OpenRC
+- **Automated installation**: Minimal user interaction required
+- **Multiple desktop profiles**:
+  - `gentoo_base` - Base desktop-ready system (no WM/DE)
+  - `gentoo_niri` - Base + Niri compositor + Waybar
+  - `gentoo_hyprland` - Base + Hyprland + Waybar
+  - `gentoo_kde` - Base + KDE Plasma desktop environment
+- **Init system choice**: systemd or OpenRC
+- **GPU support**: NVIDIA, AMD (AMDGPU), and Intel drivers
+- **Kernel options**:
+  - `distribution-kernel` (gentoo-kernel-bin) - Pre-built binary kernel (fastest)
+  - `gentoo-kernel` - Auto-configured source kernel (builds locally)
+  - `gentoo-sources` - Manual kernel configuration with menuconfig/localyesconfig/defconfig
+- **Flexible partitioning**: Automatic or manual (cfdisk/fdisk/parted)
+- **Binary packages**: Uses Gentoo binhost for faster installation
+- **Hardware support**: GPU drivers, firmware, Bluetooth
+- **Modern desktop stack**: PipeWire, Wayland, XWayland
 
-Способ установки ядра выбирается на первом этапе. Ручной режим интерактивный: перед продолжением пользователь должен самостоятельно настроить ядро.
+### 🚀 Installation Methods
 
-Менеджер входа выбирается на втором этапе:
+#### Method 1: Unified Script (Recommended)
 
-- **Ly** — минималистичный TUI-экран входа; удобен для Niri/Hyprland.
-- **SDDM** — графический экран входа; наиболее естественный вариант для KDE Plasma.
-- **greetd + tuigreet** — лёгкий TUI-вариант с выбором сессии.
-
-Для KDE по умолчанию предлагается SDDM, для остальных профилей — Ly. Выбор можно изменить в интерактивном меню.
-
-Способ установки ядра (выбирается на первом этапе):
-
-- **Automatic (автоматический)** — устанавливает `sys-kernel/gentoo-kernel`, который Portage собирает локально.
-- **Binary (бинарный)** — устанавливает `sys-kernel/gentoo-kernel-bin` с совместимого сервера бинарных пакетов. Если подходящий бинарный пакет недоступен, установка завершится с ошибкой.
-- **Manual (ручной)** — устанавливает `sys-kernel/gentoo-sources` и `sys-kernel/genkernel`, открывает `make menuconfig`, собирает и устанавливает ядро, а затем создаёт initramfs.
-- `MAKEOPTS` для сборки через Portage рассчитывается автоматически с учётом CPU и RAM.
-
-Видеокарта:
-
-- перед разметкой установщик пытается определить GPU через `lspci` и показывает найденные устройства;
-- пользователь выбирает NVIDIA, AMD, Intel или Other;
-- NVIDIA: устанавливается проприетарный `x11-drivers/nvidia-drivers`;
-- AMD: используется драйвер ядра AMDGPU/Radeon, Mesa (OpenGL/Vulkan) и `sys-kernel/linux-firmware`; AMDGPU-PRO не устанавливается;
-- Intel: используются драйвер ядра Intel, Mesa и firmware;
-- Other: сохраняются настройки графики Stage 3/профиля.
-
-Для AMD в Portage включается `VIDEO_CARDS: -* amdgpu radeonsi`. Старые AMD/ATI GPU могут дополнительно требовать `radeon`.
-
-## Разметка
-
-Автоматический режим:
-
-- GPT / UEFI
-- EFI: 1 GiB FAT32
-- swap: размер выбирается перед автоматической разметкой (например `8G`, `16G` или `NONE`)
-- root: всё оставшееся место, ext4
-
-Также доступны:
-
-- cfdisk
-- fdisk
-- parted
-
-При ручной разметке EFI/root/swap указываются пользователем. Swap можно отключить, введя `NONE`.
-
-## Запуск
-
-Загрузитесь с Gentoo Live ISO в **UEFI** и получите root shell.
-
-Если репозиторий уже доступен через GitHub:
+Single script that handles both pre-chroot and chroot phases automatically:
 
 ```bash
-git clone https://github.com/weedblya/gentoo-installer.git /root/gentoo-installer
-cd /root/gentoo-installer
-chmod +x install_part1.sh install_part2.sh
+# Download and run
+git clone https://github.com/weedblya/gentoo-installer.git
+cd gentoo-installer
+chmod +x gentoo-install-unified.sh
+./gentoo-install-unified.sh
+```
+
+#### Method 2: Two-Part Installation
+
+Traditional approach with separate scripts for each phase:
+
+**Part 1 (Live environment - before chroot):**
+```bash
+git clone https://github.com/weedblya/gentoo-installer.git
+cd gentoo-installer
+chmod +x install_part1.sh
 ./install_part1.sh
 ```
 
-Скрипт попросит выбрать:
-
-1. диск;
-2. профиль;
-3. способ установки ядра (automatic / binary / manual);
-4. init;
-5. GPU vendor (NVIDIA / AMD / Intel / Other);
-6. partitioning method;
-7. swap size for automatic partitioning.
-
-Например, для автоматической разметки можно указать:
-
-```
-16G
-```
-
-или:
-
-```
-8G
-```
-
-Если swap не нужен, можно указать `NONE`.
-
-В ручном режиме размер swap задаётся самой разметкой диска: установщик только попросит выбрать созданный swap-раздел или `NONE`.
-
-После завершения первой части **chroot выполняется вручную**:
-
+**Part 2 (Inside chroot):**
 ```bash
+# After Part 1 completes, mount virtual filesystems and enter chroot:
 mount --types proc /proc /mnt/gentoo/proc
 mount --rbind /sys /mnt/gentoo/sys
 mount --make-rslave /mnt/gentoo/sys
@@ -118,87 +70,387 @@ mount --rbind /dev /mnt/gentoo/dev
 mount --make-rslave /mnt/gentoo/dev
 mount --rbind /run /mnt/gentoo/run
 mount --make-rslave /mnt/gentoo/run
-cp --dereference /etc/resolv.conf /mnt/gentoo/etc/resolv.conf
 chroot /mnt/gentoo /bin/bash
 source /etc/profile
+
+# Run Part 2
 /root/install_part2.sh
 ```
 
-После завершения второй части:
+### 📦 What Gets Installed
+
+**Base System:**
+- **Kernel** (choice of three options):
+  - `distribution-kernel` (gentoo-kernel-bin) - Pre-compiled binary kernel
+  - `gentoo-kernel` - Auto-configured source kernel built locally
+  - `gentoo-sources` - Full manual configuration with menuconfig/localyesconfig/defconfig
+- Essential tools: sudo, vim, nano, git, curl, wget, btop
+- Network: NetworkManager, OpenSSH
+- Audio: PipeWire, WirePlumber
+- Graphics: Mesa, Vulkan
+- GPU drivers:
+  - **NVIDIA**: proprietary nvidia-drivers with Wayland support
+  - **AMD**: AMDGPU/RadeonSI with Vulkan, VAAPI, VDPAU
+  - **Intel**: Intel graphics with Vulkan, VAAPI
+- Wayland: wayland, wayland-protocols, XWayland
+
+**Profile-Specific Packages:**
+- **Base**: No additional compositor or desktop environment
+- **Niri**: Niri compositor, Waybar, Fuzzel, Mako, Swaybg, Swayidle, Swaylock, Ly display manager
+- **Hyprland**: Hyprland, Waybar, Hyprlock, Hypridle, Hyprpaper, Hyprpicker, Ly display manager, xdg-desktop-portal-hyprland
+- **KDE**: KDE Plasma Meta, Konsole, Dolphin, Kate, SDDM display manager, xdg-desktop-portal-kde
+
+### 🔧 Kernel Options Explained
+
+**1. distribution-kernel (gentoo-kernel-bin)** ⚡
+- Pre-compiled binary kernel from Gentoo
+- Fastest installation (5-10 minutes)
+- Generic configuration works on most hardware
+- Recommended for beginners and quick deployments
+
+**2. gentoo-kernel** 🔨
+- Auto-configured source kernel
+- Builds locally based on your hardware
+- Installation time: 30-90 minutes (depends on CPU)
+- Good balance between optimization and convenience
+
+**3. gentoo-sources** 🎯
+- Full manual kernel configuration
+- Complete control over kernel features
+- Three configuration methods:
+  - `menuconfig` - Interactive menu-based configuration (ncurses)
+  - `localyesconfig` - Minimal config based on currently loaded modules
+  - `defconfig` - Default generic configuration
+- Installation time: 45-120+ minutes
+- Recommended for advanced users who need specific features
+
+### ⚙️ System Requirements
+
+- **UEFI** boot mode (BIOS/Legacy is not supported)
+- Minimum **2 GB RAM** (4 GB+ recommended)
+- Minimum **20 GB disk space**
+- Active **internet connection**
+
+### 🖥️ Desktop Environment Profiles
+
+**gentoo_base** 🔧
+- Minimal desktop-ready system without compositor or DE
+- Includes Wayland/X11 libraries and basic desktop stack
+- Perfect base for custom setups or manual DE installation
+- Fastest installation
+
+**gentoo_niri** 🪟
+- Niri - Scrollable-tiling Wayland compositor
+- Waybar - Highly customizable status bar
+- Fuzzel - Application launcher
+- Mako - Notification daemon
+- Swaybg, Swayidle, Swaylock - Background, idle, and lock screen
+- Ly - TUI display manager
+- Best for: Tiling workflow enthusiasts
+
+**gentoo_hyprland** 🌊
+- Hyprland - Dynamic tiling Wayland compositor with animations
+- Waybar - Status bar
+- Hyprlock - Screen locker
+- Hypridle - Idle daemon
+- Hyprpaper - Wallpaper utility
+- Hyprpicker - Color picker
+- Ly - TUI display manager
+- xdg-desktop-portal-hyprland - Screen sharing support
+- Hyproverlay repository enabled
+- Best for: Modern, animated tiling experience
+
+**gentoo_kde** 🎨
+- KDE Plasma Meta - Full desktop environment
+- Konsole - Terminal emulator
+- Dolphin - File manager with semantic desktop
+- Kate - Advanced text editor
+- SDDM - Graphical display manager
+- xdg-desktop-portal-kde - Portal implementation
+- Best for: Full-featured desktop with GUI configuration
+
+### 🔧 Configuration
+
+The installer uses an "Arch-like" package availability approach:
+- Global `~amd64` keywords enabled
+- All packages unmasked (hard masks still apply)
+- Binary packages from official Gentoo binhost
+- Additional repositories: GURU, Hyproverlay (for Hyprland profile)
+
+**GPU Support:** For detailed information about GPU drivers and configuration, see [GPU_SUPPORT.md](GPU_SUPPORT.md).
+
+### 📝 After Installation
+
+1. Exit the chroot environment
+2. Unmount filesystems: `umount -R /mnt/gentoo`
+3. Reboot: `reboot`
+4. Log in with your created user account
+5. Configure network: `nmtui` or `nmcli`
+6. Update system: `emerge --sync && emerge -uDN @world`
+
+**If you chose gentoo-sources (manual kernel):**
+- If you skipped kernel configuration during installation, you must complete it before the system can boot
+- Steps:
+  ```bash
+  cd /usr/src/linux
+  make menuconfig  # or localyesconfig/defconfig
+  make -j$(nproc) && make modules_install && make install
+  genkernel --install --kernel-config=/usr/src/linux/.config initramfs
+  grub-mkconfig -o /boot/grub/grub.cfg
+  ```
+
+### 🎯 Quick Start Guide
+
+**For beginners:**
+- Profile: `gentoo_kde` (full desktop environment)
+- Init: `systemd` (more automated)
+- Kernel: `distribution-kernel` (fastest)
+- Partitioning: `automatic`
+
+**For tiling WM enthusiasts:**
+- Profile: `gentoo_hyprland` or `gentoo_niri`
+- Init: Your preference
+- Kernel: `gentoo-kernel` (optimized for your hardware)
+- Partitioning: `automatic` or manual
+
+**For advanced users:**
+- Profile: `gentoo_base` (customize everything)
+- Init: Your preference
+- Kernel: `gentoo-sources` (full control)
+- Partitioning: Manual with preferred tool
+
+### 📄 License
+
+MIT License - see [LICENSE](LICENSE) file for details.
+
+### 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit issues and pull requests.
+
+---
+
+## Русский
+
+### 📋 Описание
+
+Автоматизированные скрипты установки Gentoo Linux, вдохновленные archinstall. Эти скрипты упрощают процесс установки Gentoo, автоматизируя разметку диска, извлечение Stage 3, установку пакетов и настройку системы.
+
+### ✨ Возможности
+
+- **Автоматическая установка**: минимальное участие пользователя
+- **Несколько профилей рабочего стола**:
+  - `gentoo_base` - базовая система, готовая к установке рабочего стола (без WM/DE)
+  - `gentoo_niri` - база + композитор Niri + Waybar
+  - `gentoo_hyprland` - база + Hyprland + Waybar
+  - `gentoo_kde` - база + окружение рабочего стола KDE Plasma
+- **Выбор init-системы**: systemd или OpenRC
+- **Поддержка GPU**: драйверы NVIDIA, AMD (AMDGPU) и Intel
+- **Варианты ядра**:
+  - `distribution-kernel` (gentoo-kernel-bin) - Предсобранное бинарное ядро (самое быстрое)
+  - `gentoo-kernel` - Автоматически настраиваемое ядро из исходников (собирается локально)
+  - `gentoo-sources` - Ручная настройка ядра с menuconfig/localyesconfig/defconfig
+- **Гибкая разметка диска**: автоматическая или ручная (cfdisk/fdisk/parted)
+- **Бинарные пакеты**: использует Gentoo binhost для ускорения установки
+- **Поддержка оборудования**: драйверы GPU, прошивки, Bluetooth
+- **Современный стек рабочего стола**: PipeWire, Wayland, XWayland
+
+### 🚀 Методы установки
+
+#### Метод 1: Единый скрипт (рекомендуется)
+
+Единый скрипт, который автоматически обрабатывает фазы до и после chroot:
 
 ```bash
-exit
-umount -R /mnt/gentoo
-reboot
+# Скачать и запустить
+git clone https://github.com/weedblya/gentoo-installer.git
+cd gentoo-installer
+chmod +x gentoo-install-unified.sh
+./gentoo-install-unified.sh
 ```
 
-## Пользователь
+#### Метод 2: Установка в два этапа
 
-Во второй части установщик запросит:
+Традиционный подход с отдельными скриптами для каждой фазы:
 
-- hostname системы (по умолчанию `gentoo`);
-- пароль root;
-- имя нового пользователя;
-- пароль пользователя.
+**Часть 1 (Live окружение - до chroot):**
+```bash
+git clone https://github.com/weedblya/gentoo-installer.git
+cd gentoo-installer
+chmod +x install_part1.sh
+./install_part1.sh
+```
 
-Пользователь получает группы:
+**Часть 2 (Внутри chroot):**
+```bash
+# После завершения части 1, смонтируйте виртуальные файловые системы и войдите в chroot:
+mount --types proc /proc /mnt/gentoo/proc
+mount --rbind /sys /mnt/gentoo/sys
+mount --make-rslave /mnt/gentoo/sys
+mount --rbind /dev /mnt/gentoo/dev
+mount --make-rslave /mnt/gentoo/dev
+mount --rbind /run /mnt/gentoo/run
+mount --make-rslave /mnt/gentoo/run
+chroot /mnt/gentoo /bin/bash
+source /etc/profile
 
-- wheel
-- video
-- audio
-- render
-- input
-- seat (если такая группа существует)
+# Запустить часть 2
+/root/install_part2.sh
+```
 
-Для `wheel` создаётся sudoers-правило.
+### 📦 Что устанавливается
 
-## Portage
+**Базовая система:**
+- **Ядро** (на выбор три варианта):
+  - `distribution-kernel` (gentoo-kernel-bin) - Предсобранное бинарное ядро
+  - `gentoo-kernel` - Автонастраиваемое ядро из исходников, собранное локально
+  - `gentoo-sources` - Полная ручная настройка с menuconfig/localyesconfig/defconfig
+- Необходимые утилиты: sudo, vim, nano, git, curl, wget, btop
+- Сеть: NetworkManager, OpenSSH
+- Аудио: PipeWire, WirePlumber
+- Графика: Mesa, Vulkan
+- Драйверы GPU:
+  - **NVIDIA**: проприетарные nvidia-drivers с поддержкой Wayland
+  - **AMD**: AMDGPU/RadeonSI с Vulkan, VAAPI, VDPAU
+  - **Intel**: Intel графика с Vulkan, VAAPI
+- Wayland: wayland, wayland-protocols, XWayland
 
-Установщик использует:
+**Пакеты для конкретных профилей:**
+- **Base**: Без дополнительного композитора или окружения рабочего стола
+- **Niri**: композитор Niri, Waybar, Fuzzel, Mako, Swaybg, Swayidle, Swaylock, экранный менеджер Ly
+- **Hyprland**: Hyprland, Waybar, Hyprlock, Hypridle, Hyprpaper, Hyprpicker, экранный менеджер Ly, xdg-desktop-portal-hyprland
+- **KDE**: KDE Plasma Meta, Konsole, Dolphin, Kate, экранный менеджер SDDM, xdg-desktop-portal-kde
 
-- `--autounmask=y`
-- `--autounmask-write=y`
-- `--autounmask-unrestricted-atoms=y`
-- `--backtrack=30`
-- `--getbinpkg`
+### 🔧 Варианты ядра — подробности
 
-Настройки создаются в:
+**1. distribution-kernel (gentoo-kernel-bin)** ⚡
+- Предкомпилированное бинарное ядро от Gentoo
+- Самая быстрая установка (5-10 минут)
+- Универсальная конфигурация работает на большинстве систем
+- Рекомендуется для начинающих и быстрого развертывания
 
-- `/etc/portage/package.use/`
-- `/etc/portage/package.accept_keywords/`
-- `/etc/portage/package.unmask/`
-- `/etc/portage/package.mask/`
+**2. gentoo-kernel** 🔨
+- Автоматически настраиваемое ядро из исходников
+- Собирается локально под ваше оборудование
+- Время установки: 30-90 минут (зависит от процессора)
+- Хороший баланс между оптимизацией и удобством
 
-При необходимости Portage-конфигурация применяется через `etc-update`.
+**3. gentoo-sources** 🎯
+- Полная ручная настройка ядра
+- Полный контроль над функциями ядра
+- Три метода конфигурации:
+  - `menuconfig` - Интерактивная настройка через меню (ncurses)
+  - `localyesconfig` - Минимальная конфигурация на основе загруженных модулей
+  - `defconfig` - Универсальная конфигурация по умолчанию
+- Время установки: 45-120+ минут
+- Рекомендуется для опытных пользователей, которым нужны специфические функции
 
-**Глобальный `~amd64` включается**, а обычные записи `package.mask` глобально перекрываются через `package.unmask`. Это сделано для установки пакетов с меньшим количеством ручных действий и приближает сценарий к модели Arch, но не гарантирует разрешение жёстких `-amd64` масок, конфликтов зависимостей или USE-флагов. Нестабильные версии могут чаще приводить к поломкам.
+### 🖥️ Профили окружения рабочего стола
 
-## Репозитории
+**gentoo_base** 🔧
+- Минимальная система, готовая к установке рабочего стола без композитора или DE
+- Включает библиотеки Wayland/X11 и базовый стек рабочего стола
+- Идеальная база для пользовательских настроек или ручной установки DE
+- Самая быстрая установка
 
-Используются:
+**gentoo_niri** 🪟
+- Niri - Прокручиваемый тайловый Wayland-композитор
+- Waybar - Настраиваемая строка состояния
+- Fuzzel - Лончер приложений
+- Mako - Демон уведомлений
+- Swaybg, Swayidle, Swaylock - Фон, бездействие и блокировка экрана
+- Ly - TUI менеджер входа
+- Лучше для: Энтузиастов тайловых менеджеров окон
 
-- Gentoo main repository;
-- GURU;
-- Hyprland profile дополнительно включает hyproverlay.
-- KDE Plasma использует официальный профиль Gentoo `desktop/plasma` (OpenRC) или `desktop/plasma/systemd`; профиль Plasma не навязывает SDDM: менеджер входа выбирается отдельно.
+**gentoo_hyprland** 🌊
+- Hyprland - Динамический тайловый Wayland-композитор с анимацией
+- Waybar - Строка состояния
+- Hyprlock - Блокировка экрана
+- Hypridle - Демон бездействия
+- Hyprpaper - Утилита обоев
+- Hyprpicker - Пипетка цвета
+- Ly - TUI менеджер входа
+- xdg-desktop-portal-hyprland - Поддержка скриншеринга
+- Включён репозиторий Hyproverlay
+- Лучше для: Современный анимированный тайловый опыт
 
-## Stage 3
+**gentoo_kde** 🎨
+- KDE Plasma Meta - Полное окружение рабочего стола
+- Konsole - Эмулятор терминала
+- Dolphin - Файловый менеджер с семантическим рабочим столом
+- Kate - Продвинутый текстовый редактор
+- SDDM - Графический менеджер входа
+- xdg-desktop-portal-kde - Реализация портала
+- Лучше для: Полнофункциональный рабочий стол с GUI-настройкой
 
-Первая часть автоматически определяет актуальный Stage 3 для выбранного init, скачивает его с Gentoo distfiles и проверяет SHA256 перед распаковкой.
+### ⚙️ Системные требования
 
-## Логи
+- Режим загрузки **UEFI** (BIOS/Legacy не поддерживается)
+- Минимум **2 ГБ RAM** (рекомендуется 4 ГБ+)
+- Минимум **20 ГБ** дискового пространства
+- Активное **подключение к интернету**
 
-Логи сохраняются:
+### 🔧 Конфигурация
 
-- в Live ISO: `/tmp/gentoo-install-part1-*.log`;
-- в установленной системе: `/root/gentoo-install-part1.log`;
-- в установленной системе после второй части: `/root/gentoo-install-part2-*.log` и `/root/gentoo-install-part2-final.log`.
+Установщик использует подход "как в Arch" для доступности пакетов:
+- Глобально включены ключевые слова `~amd64`
+- Все пакеты размаскированы (жесткие маски все еще применяются)
+- Бинарные пакеты из официального Gentoo binhost
+- Дополнительные репозитории: GURU, Hyproverlay (для профиля Hyprland)
 
-## Важно
+**Поддержка GPU:** Для подробной информации о драйверах GPU и конфигурации, см. [GPU_SUPPORT.md](GPU_SUPPORT.md).
 
-Это автоматизатор установки, а не LiveCD сам по себе. После неудачного запуска первую часть можно запустить повторно: скрипт перед новой разметкой пытается отключить старый swap и размонтировать разделы выбранного диска, затем заново перечитывает таблицу разделов.
+### 📝 После установки
 
-Перед использованием на единственном рабочем диске рекомендуется сначала проверить его в виртуальной машине или на отдельном физическом диске.
+1. Выйдите из chroot окружения
+2. Размонтируйте файловые системы: `umount -R /mnt/gentoo`
+3. Перезагрузитесь: `reboot`
+4. Войдите под созданным пользователем
+5. Настройте сеть: `nmtui` или `nmcli`
+6. Обновите систему: `emerge --sync && emerge -uDN @world`
 
-Скрипты рассчитаны на **AMD64 + UEFI**.
+**Если вы выбрали gentoo-sources (ручная настройка ядра):**
+- Если вы пропустили конфигурацию ядра во время установки, вы должны завершить её перед загрузкой системы
+- Шаги:
+  ```bash
+  cd /usr/src/linux
+  make menuconfig  # или localyesconfig/defconfig
+  make -j$(nproc) && make modules_install && make install
+  genkernel --install --kernel-config=/usr/src/linux/.config initramfs
+  grub-mkconfig -o /boot/grub/grub.cfg
+  ```
 
+### 🎯 Руководство быстрого старта
+
+**Для начинающих:**
+- Профиль: `gentoo_kde` (полное окружение рабочего стола)
+- Init: `systemd` (более автоматизированный)
+- Ядро: `distribution-kernel` (самое быстрое)
+- Разметка: `automatic`
+
+**Для любителей тайловых WM:**
+- Профиль: `gentoo_hyprland` или `gentoo_niri`
+- Init: На ваше усмотрение
+- Ядро: `gentoo-kernel` (оптимизировано под ваше железо)
+- Разметка: `automatic` или ручная
+
+**Для опытных пользователей:**
+- Профиль: `gentoo_base` (настройте всё сами)
+- Init: На ваше усмотрение
+- Ядро: `gentoo-sources` (полный контроль)
+- Разметка: Ручная с предпочитаемым инструментом
+
+### 📄 Лицензия
+
+Лицензия MIT - подробности в файле [LICENSE](LICENSE).
+
+### 🤝 Участие в разработке
+
+Приветствуются любые предложения! Не стесняйтесь создавать issues и pull requests.
+
+---
+
+<div align="center">
+
+Made with ❤️ for the Gentoo community
+
+</div>
