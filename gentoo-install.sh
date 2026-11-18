@@ -152,7 +152,8 @@ setup_tui_backend() {
 }
 
 menu_dialog() {
-  local title="$1" height="$2" width="$3" shift 3
+  local title="$1" height="$2" width="$3"
+  shift 3
   local items=("$@")
 
   case "$TUI_BACKEND" in
@@ -165,9 +166,14 @@ menu_dialog() {
         "${items[@]}" 2>&1
       ;;
     select)
-      local choice
+      local choice idx=0
       printf '\n=== %s ===\n' "$title"
-      select choice in "${items[@]:1:${#items[@]}:2}"; do
+      # Extract labels from items array (skip values, take only labels)
+      local labels=()
+      for ((i=1; i<${#items[@]}; i+=2)); do
+        labels+=("${items[$((i))]}")
+      done
+      select choice in "${labels[@]}"; do
         [[ -n "$choice" ]] && printf '%s' "$choice"
         break
       done
@@ -176,7 +182,8 @@ menu_dialog() {
 }
 
 menu_checklist() {
-  local title="$1" height="$2" width="$3" shift 3
+  local title="$1" height="$2" width="$3"
+  shift 3
   local items=("$@")
 
   case "$TUI_BACKEND" in
@@ -217,20 +224,31 @@ input_dialog() {
 
 yesno_dialog() {
   local title="$1" text="$2"
+  local response
 
   case "$TUI_BACKEND" in
     dialog)
-      dialog --title "$title" --yesno "$text" 10 60 2>&1
-      return $?
+      if dialog --title "$title" --yesno "$text" 10 60 2>&1; then
+        printf 'yes'
+      else
+        printf 'no'
+      fi
       ;;
     whiptail)
-      whiptail --title "$title" --yesno "$text" 10 60 2>&1
-      return $?
+      if whiptail --title "$title" --yesno "$text" 10 60 2>&1; then
+        printf 'yes'
+      else
+        printf 'no'
+      fi
       ;;
     select)
       printf '%s [y/N]: ' "$text"
-      read -r choice
-      [[ "${choice,,}" =~ ^y ]]
+      read -r response
+      if [[ "${response,,}" =~ ^y ]]; then
+        printf 'yes'
+      else
+        printf 'no'
+      fi
       ;;
   esac
 }
@@ -336,7 +354,7 @@ hardware_detection() {
   record OK "virtualization detection" "$VIRT"
 
   # GPU detection
-  if yesno_dialog "GPU Detection" "Auto-detect graphics hardware?"; then
+  if [[ $(yesno_dialog "GPU Detection" "Auto-detect graphics hardware?") == "yes" ]]; then
     VIDEO_CARDS=$(detect_gpus | xargs)
     if [[ -n "$VIDEO_CARDS" ]]; then
       log "Detected GPUs: $VIDEO_CARDS"
@@ -360,8 +378,8 @@ config_init_system() {
     "2" "systemd (featureful)")
 
   case "$choice" in
-    1) INIT_SYSTEM="openrc" ;;
-    2) INIT_SYSTEM="systemd" ;;
+    1|OpenRC*) INIT_SYSTEM="openrc" ;;
+    2|systemd*) INIT_SYSTEM="systemd" ;;
     *) INIT_SYSTEM="openrc" ;;
   esac
 
@@ -420,7 +438,7 @@ config_kernel() {
 }
 
 config_binhost() {
-  if yesno_dialog "Binary Packages" "Use binary packages (binhost) for faster installation?"; then
+  if [[ $(yesno_dialog "Binary Packages" "Use binary packages (binhost) for faster installation?") == "yes" ]]; then
     USE_BINHOST=1
     log "Binary packages: enabled"
   else
@@ -463,22 +481,27 @@ config_filesystem() {
 
 config_disk() {
   local selected_disk
+  local disk_valid=0
 
-  msgbox "Disk Selection" "Available disks will be shown. Please select one."
+  while ((! disk_valid)); do
+    msgbox "Disk Selection" "Available disks will be shown. Please select one."
 
-  printf '\nAvailable disks:\n'
-  lsblk -dno NAME,SIZE,TYPE,MODEL | awk '$3=="disk" {printf "  /dev/%-12s %-8s %s\n", $1, $2, substr($0, index($0,$4))}'
+    printf '\nAvailable disks:\n'
+    lsblk -dno NAME,SIZE,TYPE,MODEL | awk '$3=="disk" {printf "  /dev/%-12s %-8s %s\n", $1, $2, substr($0, index($0,$4))}'
 
-  selected_disk=$(input_dialog "Disk Selection" "Enter target disk (e.g., /dev/sda):" "/dev/")
+    selected_disk=$(input_dialog "Disk Selection" "Enter target disk (e.g., /dev/sda):" "/dev/")
 
-  [[ -n "$selected_disk" ]] || die "no disk given"
-  [[ -b "$selected_disk" ]] || die "not a block device: $selected_disk"
-  [[ "$(lsblk -dno TYPE "$selected_disk" 2>/dev/null)" == "disk" ]] ||
-    die "$selected_disk is not a whole disk"
+    [[ -n "$selected_disk" ]] || { msgbox "Input Error" "Disk path cannot be empty"; continue; }
+    [[ -b "$selected_disk" ]] || { msgbox "Input Error" "Not a block device: $selected_disk"; continue; }
+    [[ "$(lsblk -dno TYPE "$selected_disk" 2>/dev/null)" == "disk" ]] || { msgbox "Input Error" "$selected_disk is not a whole disk"; continue; }
 
-  if findmnt -rn -S "$selected_disk" >/dev/null 2>&1; then
-    die "$selected_disk or its partitions are currently mounted"
-  fi
+    if findmnt -rn -S "$selected_disk" >/dev/null 2>&1; then
+      msgbox "Input Error" "$selected_disk or its partitions are currently mounted"
+      continue
+    fi
+
+    disk_valid=1
+  done
 
   DISK="$selected_disk"
   DISK_GIB=$(( $(lsblk -bdno SIZE "$DISK") / 1073741824 ))
@@ -493,27 +516,44 @@ config_root_size() {
   local max_root=$((DISK_GIB - handle - 2))
 
   local root_size
-  root_size=$(input_dialog "Root Partition Size" "Enter root size in GiB (min 20, max $max_root):" "30")
+  while true; do
+    root_size=$(input_dialog "Root Partition Size" "Enter root size in GiB (min 20, max $max_root):" "30")
 
-  [[ "$root_size" =~ ^[0-9]+$ ]] || die "Enter a whole number"
-  ((root_size >= 20)) || die "Root must be at least 20GiB"
-  ((root_size <= max_root)) || die "Root size too large"
+    [[ -n "$root_size" ]] || { msgbox "Input Error" "Root size cannot be empty"; continue; }
+    [[ "$root_size" =~ ^[0-9]+$ ]] || { msgbox "Input Error" "Please enter a whole number"; continue; }
+    ((root_size >= 20)) || { msgbox "Input Error" "Root must be at least 20GiB"; continue; }
+    ((root_size <= max_root)) || { msgbox "Input Error" "Root size too large (max: ${max_root}GiB)"; continue; }
 
-  ROOT_GB="$root_size"
-  log "Root size: ${ROOT_GB}GiB"
+    ROOT_GB="$root_size"
+    log "Root size: ${ROOT_GB}GiB"
+    break
+  done
 }
 
 config_identity() {
-  HOSTNAME=$(input_dialog "Hostname" "Enter hostname:" "gentoo")
-  [[ "$HOSTNAME" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || die "Invalid hostname"
+  local hostname_valid=0
+  while ((! hostname_valid)); do
+    HOSTNAME=$(input_dialog "Hostname" "Enter hostname:" "gentoo")
+    [[ -n "$HOSTNAME" ]] || { msgbox "Input Error" "Hostname cannot be empty"; continue; }
+    [[ "$HOSTNAME" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] && hostname_valid=1 || msgbox "Input Error" "Invalid hostname (alphanumeric, dots, hyphens only)"
+  done
 
-  USERNAME=$(input_dialog "Username" "Enter username:" "user")
-  [[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "Invalid username"
+  local username_valid=0
+  while ((! username_valid)); do
+    USERNAME=$(input_dialog "Username" "Enter username:" "user")
+    [[ -n "$USERNAME" ]] || { msgbox "Input Error" "Username cannot be empty"; continue; }
+    [[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] && username_valid=1 || msgbox "Input Error" "Invalid username (lowercase, digits, underscore, dash only)"
+  done
 
-  TIMEZONE=$(input_dialog "Timezone" "Enter timezone:" "UTC")
-  [[ -e "/usr/share/zoneinfo/$TIMEZONE" ]] || die "Unknown timezone"
+  local timezone_valid=0
+  while ((! timezone_valid)); do
+    TIMEZONE=$(input_dialog "Timezone" "Enter timezone:" "UTC")
+    [[ -n "$TIMEZONE" ]] || { msgbox "Input Error" "Timezone cannot be empty"; continue; }
+    [[ -e "/usr/share/zoneinfo/$TIMEZONE" ]] && timezone_valid=1 || msgbox "Input Error" "Unknown timezone: $TIMEZONE"
+  done
 
   KEYMAP=$(input_dialog "Keymap" "Enter console keymap:" "us")
+  [[ -n "$KEYMAP" ]] || KEYMAP="us"
 
   log "Hostname: $HOSTNAME, User: $USERNAME, TZ: $TIMEZONE, Keymap: $KEYMAP"
 }
@@ -539,7 +579,7 @@ config_boot_type() {
     BOOT_TYPE="bios"
   fi
 
-  if yesno_dialog "Boot Type" "Use $BOOT_TYPE boot (auto-detected)?"; then
+  if [[ $(yesno_dialog "Boot Type" "Use $BOOT_TYPE boot (auto-detected)?") == "yes" ]]; then
     log "Boot type: $BOOT_TYPE"
   else
     if [[ "$BOOT_TYPE" == "uefi" ]]; then
@@ -573,6 +613,18 @@ interactive_config() {
 show_summary() {
   step "Configuration Summary"
 
+  # Validate all required variables are set
+  local errors=0
+  [[ -n "$HOSTNAME" ]] || { warn "Hostname not set"; ((errors++)); }
+  [[ -n "$USERNAME" ]] || { warn "Username not set"; ((errors++)); }
+  [[ -n "$TIMEZONE" ]] || { warn "Timezone not set"; ((errors++)); }
+  [[ -n "$DISK" ]] || { warn "Disk not set"; ((errors++)); }
+  [[ -n "$KEYMAP" ]] || { warn "Keymap not set"; ((errors++)); }
+
+  if ((errors > 0)); then
+    die "Configuration incomplete: $errors error(s). Please run installer again."
+  fi
+
   printf '  Boot type       : %s\n' "$BOOT_TYPE"
   printf '  Init system     : %s\n' "$INIT_SYSTEM"
   printf '  Desktop         : %s (%s)\n' "$DESKTOP_PROFILE" "$DISPLAY_PROTOCOL"
@@ -586,7 +638,7 @@ show_summary() {
   printf '  Timezone/Keymap : %s / %s\n' "$TIMEZONE" "$KEYMAP"
   printf '\n'
 
-  if yesno_dialog "Confirmation" "Proceed with installation? Type YES to confirm"; then
+  if [[ $(yesno_dialog "Confirmation" "Proceed with installation? Type YES to confirm") == "yes" ]]; then
     log "Installation confirmed by user"
   else
     die "Installation cancelled by user"
@@ -714,20 +766,26 @@ download_stage3() {
   json=$(curl -s "$latest_json") || die "failed to fetch latest stage3"
 
   local filename
-  filename=$(printf '%s' "$json" | grep -oP '"uri":\s*"[^"]*"' | head -1 | cut -d'"' -f4 | xargs basename)
+  # Try multiple parsing methods for robustness
+  filename=$(printf '%s' "$json" | grep -oP '"uri":\s*"[^"]*"' 2>/dev/null | head -1 | cut -d'"' -f4 | xargs basename 2>/dev/null)
 
-  [[ -n "$filename" ]] || die "failed to parse stage3 filename"
+  if [[ -z "$filename" ]]; then
+    # Fallback method if grep -oP not available
+    filename=$(printf '%s' "$json" | grep '"uri"' | head -1 | sed 's/.*"\([^"]*\)".*/\1/' | xargs basename 2>/dev/null)
+  fi
+
+  [[ -n "$filename" ]] || die "failed to parse stage3 filename from: $latest_json"
 
   local stage3_url="$stage3_base/$filename"
   local target="$MNT/stage3.tar.xz"
 
   log "Downloading: $filename"
-  wget -O "$target" "$stage3_url" || die "failed to download stage3"
+  wget -q -O "$target" "$stage3_url" || die "failed to download stage3 from $stage3_url"
 
   log "Extracting stage3..."
   tar -xpf "$target" -C "$MNT" || die "failed to extract stage3"
 
-  rm "$target"
+  rm -f "$target"
   log "stage3 installed"
   record OK "stage3" "extracted to $MNT"
 }
