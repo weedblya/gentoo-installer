@@ -828,16 +828,20 @@ download_stage3() {
   local json
   json=$(curl -s "$latest_json") || die "failed to fetch latest stage3"
 
-  local filename
+  local filepath
   # Try multiple parsing methods for robustness
-  filename=$(printf '%s' "$json" | grep -oP '"uri":\s*"[^"]*"' 2>/dev/null | head -1 | cut -d'"' -f4 | xargs basename 2>/dev/null)
+  filepath=$(printf '%s' "$json" | grep -oP '"uri":\s*"\K[^"]+' 2>/dev/null | head -1)
 
-  if [[ -z "$filename" ]]; then
+  if [[ -z "$filepath" ]]; then
     # Fallback method if grep -oP not available
-    filename=$(printf '%s' "$json" | grep '"uri"' | head -1 | sed 's/.*"\([^"]*\)".*/\1/' | xargs basename 2>/dev/null)
+    filepath=$(printf '%s' "$json" | grep '"uri"' | head -1 | sed 's/.*"uri"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
   fi
 
-  [[ -n "$filename" ]] || die "failed to parse stage3 filename from: $latest_json"
+  [[ -n "$filepath" ]] || die "failed to parse stage3 URI from: $latest_json"
+
+  # Extract filename from path (e.g., "autobuilds/stage3-amd64-openrc-20241118.tar.xz" -> "stage3-amd64-openrc-20241118.tar.xz")
+  local filename="${filepath##*/}"
+  [[ -n "$filename" ]] || die "failed to extract filename from: $filepath"
 
   local stage3_url="$stage3_base/$filename"
   local target="$MNT/stage3.tar.xz"
