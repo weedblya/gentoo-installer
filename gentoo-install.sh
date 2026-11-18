@@ -25,9 +25,6 @@ readonly CHROOT_SCRIPT="$MNT/root/install_in_chroot.sh"
 LIVE_LOG="/tmp/gentoo-install-$(date +%Y%m%d-%H%M%S).log"
 readonly LIVE_LOG
 
-# Dialog/TUI backend selection
-TUI_BACKEND=""  # will be set to dialog or whiptail
-
 # Configuration variables (all collected during interactive phase)
 INIT_SYSTEM="openrc"           # openrc | systemd
 DESKTOP_PROFILE="kde"          # kde | hyprland | niri | mangowm | minimal
@@ -138,134 +135,82 @@ print_status_table() {
 exec > >(tee -a "$LIVE_LOG") 2>&1
 
 # =============================================================================
-# TUI Backend Detection & Menu Functions
+# Simple CLI Menu Functions (no TUI dependencies)
 # =============================================================================
-setup_tui_backend() {
-  if command -v dialog >/dev/null 2>&1; then
-    TUI_BACKEND="dialog"
-  elif command -v whiptail >/dev/null 2>&1; then
-    TUI_BACKEND="whiptail"
+
+# Simple numbered menu
+menu_select() {
+  local title="$1"
+  shift
+  local options=("$@")
+
+  printf '\n=== %s ===\n' "$title"
+  local i=1
+  for opt in "${options[@]}"; do
+    printf '  %d) %s\n' "$i" "$opt"
+    ((i++))
+  done
+
+  local choice
+  while true; do
+    printf 'Choice [1-%d]: ' "${#options[@]}"
+    read -r choice
+    if [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#options[@]})); then
+      printf '%s' "${options[$((choice-1))]}"
+      return 0
+    fi
+    printf 'Invalid choice. Try again.\n'
+  done
+}
+
+# Simple yes/no prompt
+ask_yesno() {
+  local prompt="$1"
+  local default="${2:-n}"
+  local answer
+
+  while true; do
+    if [[ "${default,,}" == "y" ]]; then
+      printf '%s [Y/n]: ' "$prompt"
+    else
+      printf '%s [y/N]: ' "$prompt"
+    fi
+    read -r answer
+    answer="${answer:-$default}"
+
+    case "${answer,,}" in
+      y|yes) printf 'yes'; return 0 ;;
+      n|no)  printf 'no'; return 1 ;;
+      *) printf 'Please answer y or n.\n' ;;
+    esac
+  done
+}
+
+# Simple text input
+ask_input() {
+  local prompt="$1"
+  local default="$2"
+  local value
+
+  if [[ -n "$default" ]]; then
+    printf '%s [%s]: ' "$prompt" "$default"
   else
-    TUI_BACKEND="select"
+    printf '%s: ' "$prompt"
   fi
-  log "TUI backend: $TUI_BACKEND"
+
+  read -r value
+  printf '%s' "${value:-$default}"
 }
 
-menu_dialog() {
-  local title="$1" height="$2" width="$3"
-  shift 3
-  local items=("$@")
+# Info message
+show_message() {
+  local title="$1"
+  local text="$2"
 
-  case "$TUI_BACKEND" in
-    dialog)
-      dialog --title "$title" --menu "Select an option:" "$height" "$width" $((height - 8)) \
-        "${items[@]}" 2>&1 | head -n 1
-      ;;
-    whiptail)
-      whiptail --title "$title" --menu "Select an option:" "$height" "$width" $((height - 8)) \
-        "${items[@]}" 2>&1
-      ;;
-    select)
-      local choice idx=0
-      printf '\n=== %s ===\n' "$title"
-      # Extract labels from items array (skip values, take only labels)
-      local labels=()
-      for ((i=1; i<${#items[@]}; i+=2)); do
-        labels+=("${items[$((i))]}")
-      done
-      select choice in "${labels[@]}"; do
-        [[ -n "$choice" ]] && printf '%s' "$choice"
-        break
-      done
-      ;;
-  esac
-}
-
-menu_checklist() {
-  local title="$1" height="$2" width="$3"
-  shift 3
-  local items=("$@")
-
-  case "$TUI_BACKEND" in
-    dialog)
-      dialog --title "$title" --checklist "Select options:" "$height" "$width" $((height - 8)) \
-        "${items[@]}" 2>&1
-      ;;
-    whiptail)
-      whiptail --title "$title" --checklist "Select options:" "$height" "$width" $((height - 8)) \
-        "${items[@]}" 2>&1
-      ;;
-    select)
-      printf '\n=== %s ===\n' "$title"
-      printf 'Enter space-separated numbers: '
-      read -r choice
-      printf '%s' "$choice"
-      ;;
-  esac
-}
-
-input_dialog() {
-  local title="$1" text="$2" default="${3:-}"
-
-  case "$TUI_BACKEND" in
-    dialog)
-      dialog --title "$title" --inputbox "$text" 10 60 "$default" 2>&1 || true
-      ;;
-    whiptail)
-      whiptail --title "$title" --inputbox "$text" 10 60 "$default" 2>&1
-      ;;
-    select)
-      printf '%s [%s]: ' "$text" "$default"
-      read -r choice
-      printf '%s' "${choice:-$default}"
-      ;;
-  esac
-}
-
-yesno_dialog() {
-  local title="$1" text="$2"
-  local response
-
-  case "$TUI_BACKEND" in
-    dialog)
-      if dialog --title "$title" --yesno "$text" 10 60 2>&1; then
-        printf 'yes'
-      else
-        printf 'no'
-      fi
-      ;;
-    whiptail)
-      if whiptail --title "$title" --yesno "$text" 10 60 2>&1; then
-        printf 'yes'
-      else
-        printf 'no'
-      fi
-      ;;
-    select)
-      printf '%s [y/N]: ' "$text"
-      read -r response
-      if [[ "${response,,}" =~ ^y ]]; then
-        printf 'yes'
-      else
-        printf 'no'
-      fi
-      ;;
-  esac
-}
-
-msgbox() {
-  local title="$1" text="$2"
-  case "$TUI_BACKEND" in
-    dialog)
-      dialog --title "$title" --msgbox "$text" 10 60 2>&1
-      ;;
-    whiptail)
-      whiptail --title "$title" --msgbox "$text" 10 60 2>&1
-      ;;
-    select)
-      printf '\n=== %s ===\n%s\n' "$title" "$text"
-      ;;
-  esac
+  printf '\n=== %s ===\n' "$title"
+  printf '%s\n' "$text"
+  printf '\nPress Enter to continue...'
+  read -r
 }
 
 # =============================================================================
@@ -354,7 +299,7 @@ hardware_detection() {
   record OK "virtualization detection" "$VIRT"
 
   # GPU detection
-  if [[ $(yesno_dialog "GPU Detection" "Auto-detect graphics hardware?") == "yes" ]]; then
+  if [[ $(ask_yesno "Auto-detect graphics hardware?" "y") == "yes" ]]; then
     VIDEO_CARDS=$(detect_gpus | xargs)
     if [[ -n "$VIDEO_CARDS" ]]; then
       log "Detected GPUs: $VIDEO_CARDS"
@@ -364,7 +309,67 @@ hardware_detection() {
       record OK "GPU detection" "none (profile default)"
     fi
   else
-    msgbox "GPU Selection" "Manual GPU selection will be shown next"
+    # Manual GPU selection
+    local gpu_choice
+    gpu_choice=$(menu_select "GPU Selection" \
+      "AMD (amdgpu + radeonsi)" \
+      "Intel (Mesa iris/ANV)" \
+      "NVIDIA (proprietary driver)" \
+      "Hybrid Intel + NVIDIA" \
+      "Hybrid AMD + NVIDIA" \
+      "Virtual Machine (VirtualBox)" \
+      "Virtual Machine (QEMU/KVM)" \
+      "None (use profile default)")
+
+    case "$gpu_choice" in
+      *AMD*)
+        VIDEO_CARDS="amdgpu radeonsi"
+        HAVE_NVIDIA=0
+        GPU_NEEDS_FIRMWARE=1
+        ;;
+      *Intel*NVIDIA*)
+        VIDEO_CARDS="intel nvidia"
+        HAVE_NVIDIA=1
+        GPU_NEEDS_FIRMWARE=1
+        ;;
+      *AMD*NVIDIA*)
+        VIDEO_CARDS="amdgpu radeonsi nvidia"
+        HAVE_NVIDIA=1
+        GPU_NEEDS_FIRMWARE=1
+        ;;
+      *Intel*)
+        VIDEO_CARDS="intel"
+        HAVE_NVIDIA=0
+        GPU_NEEDS_FIRMWARE=1
+        ;;
+      *NVIDIA*)
+        VIDEO_CARDS="nvidia"
+        HAVE_NVIDIA=1
+        GPU_NEEDS_FIRMWARE=1
+        ;;
+      *VirtualBox*)
+        VIDEO_CARDS="virtualbox vmware"
+        HAVE_NVIDIA=0
+        GPU_NEEDS_FIRMWARE=0
+        IS_VM=1
+        VIRT="virtualbox"
+        ;;
+      *QEMU*)
+        VIDEO_CARDS="virgl"
+        HAVE_NVIDIA=0
+        GPU_NEEDS_FIRMWARE=0
+        IS_VM=1
+        VIRT="qemu"
+        ;;
+      *None*)
+        VIDEO_CARDS=""
+        HAVE_NVIDIA=0
+        GPU_NEEDS_FIRMWARE=0
+        ;;
+    esac
+
+    log "Manual GPU selection: VIDEO_CARDS=\"$VIDEO_CARDS\""
+    record OK "GPU selection" "${VIDEO_CARDS:-profile default}"
   fi
 }
 
@@ -373,13 +378,13 @@ hardware_detection() {
 # =============================================================================
 config_init_system() {
   local choice
-  choice=$(menu_dialog "Init System" 15 60 \
-    "1" "OpenRC (default, lightweight)" \
-    "2" "systemd (featureful)")
+  choice=$(menu_select "Init System" \
+    "OpenRC (default, lightweight)" \
+    "systemd (featureful)")
 
   case "$choice" in
-    1|OpenRC*) INIT_SYSTEM="openrc" ;;
-    2|systemd*) INIT_SYSTEM="systemd" ;;
+    *OpenRC*) INIT_SYSTEM="openrc" ;;
+    *systemd*) INIT_SYSTEM="systemd" ;;
     *) INIT_SYSTEM="openrc" ;;
   esac
 
@@ -388,19 +393,19 @@ config_init_system() {
 
 config_desktop() {
   local choice
-  choice=$(menu_dialog "Desktop Environment" 15 60 \
-    "1" "KDE Plasma (full-featured)" \
-    "2" "Hyprland (Wayland tiling WM)" \
-    "3" "Niri (Wayland compositor)" \
-    "4" "MangoWM (lightweight tiling)" \
-    "5" "Minimal (no DE/WM, cli only)")
+  choice=$(menu_select "Desktop Environment" \
+    "KDE Plasma (full-featured)" \
+    "Hyprland (Wayland tiling WM)" \
+    "Niri (Wayland compositor)" \
+    "MangoWM (lightweight tiling)" \
+    "Minimal (no DE/WM, cli only)")
 
   case "$choice" in
-    1) DESKTOP_PROFILE="kde"; DISPLAY_PROTOCOL="wayland" ;;
-    2) DESKTOP_PROFILE="hyprland"; DISPLAY_PROTOCOL="wayland" ;;
-    3) DESKTOP_PROFILE="niri"; DISPLAY_PROTOCOL="wayland" ;;
-    4) DESKTOP_PROFILE="mangowm"; DISPLAY_PROTOCOL="wayland" ;;
-    5) DESKTOP_PROFILE="minimal"; DISPLAY_PROTOCOL="x11" ;;
+    *KDE*) DESKTOP_PROFILE="kde"; DISPLAY_PROTOCOL="wayland" ;;
+    *Hyprland*) DESKTOP_PROFILE="hyprland"; DISPLAY_PROTOCOL="wayland" ;;
+    *Niri*) DESKTOP_PROFILE="niri"; DISPLAY_PROTOCOL="wayland" ;;
+    *MangoWM*) DESKTOP_PROFILE="mangowm"; DISPLAY_PROTOCOL="wayland" ;;
+    *Minimal*) DESKTOP_PROFILE="minimal"; DISPLAY_PROTOCOL="x11" ;;
     *) DESKTOP_PROFILE="kde"; DISPLAY_PROTOCOL="wayland" ;;
   esac
 
@@ -409,28 +414,28 @@ config_desktop() {
 
 config_kernel() {
   local choice
-  choice=$(menu_dialog "Kernel Selection" 15 60 \
-    "1" "distribution-kernel-bin (precompiled, fastest)" \
-    "2" "gentoo-kernel (compile on target, flexible)" \
-    "3" "gentoo-sources (manual menuconfig required)")
+  choice=$(menu_select "Kernel Selection" \
+    "distribution-kernel-bin (precompiled, fastest)" \
+    "gentoo-kernel (compile on target, flexible)" \
+    "gentoo-sources (manual menuconfig required)")
 
   case "$choice" in
-    1) KERNEL_TYPE="distribution-kernel-bin"; KERNEL_COMPILE="none" ;;
-    2) KERNEL_TYPE="gentoo-kernel"; KERNEL_COMPILE="localyesconfig" ;;
-    3) KERNEL_TYPE="gentoo-sources"; KERNEL_COMPILE="menuconfig" ;;
+    *distribution-kernel-bin*) KERNEL_TYPE="distribution-kernel-bin"; KERNEL_COMPILE="none" ;;
+    *gentoo-kernel*) KERNEL_TYPE="gentoo-kernel"; KERNEL_COMPILE="localyesconfig" ;;
+    *gentoo-sources*) KERNEL_TYPE="gentoo-sources"; KERNEL_COMPILE="menuconfig" ;;
     *) KERNEL_TYPE="distribution-kernel-bin"; KERNEL_COMPILE="none" ;;
   esac
 
   if [[ "$KERNEL_TYPE" == "gentoo-sources" ]]; then
     local kc
-    kc=$(menu_dialog "Kernel Compilation" 12 60 \
-      "1" "menuconfig (interactive)" \
-      "2" "localyesconfig (based on running kernel)" \
-      "3" "defconfig (minimal defaults)")
+    kc=$(menu_select "Kernel Compilation" \
+      "menuconfig (interactive)" \
+      "localyesconfig (based on running kernel)" \
+      "defconfig (minimal defaults)")
     case "$kc" in
-      1) KERNEL_COMPILE="menuconfig" ;;
-      2) KERNEL_COMPILE="localyesconfig" ;;
-      3) KERNEL_COMPILE="defconfig" ;;
+      *menuconfig*) KERNEL_COMPILE="menuconfig" ;;
+      *localyesconfig*) KERNEL_COMPILE="localyesconfig" ;;
+      *defconfig*) KERNEL_COMPILE="defconfig" ;;
     esac
   fi
 
@@ -438,7 +443,7 @@ config_kernel() {
 }
 
 config_binhost() {
-  if [[ $(yesno_dialog "Binary Packages" "Use binary packages (binhost) for faster installation?") == "yes" ]]; then
+  if [[ $(ask_yesno "Use binary packages (binhost) for faster installation?" "y") == "yes" ]]; then
     USE_BINHOST=1
     log "Binary packages: enabled"
   else
@@ -449,13 +454,13 @@ config_binhost() {
 
 config_package_policy() {
   local choice
-  choice=$(menu_dialog "Package Policy" 15 60 \
-    "1" "Stable (standard, conservative)" \
-    "2" "Testing (~amd64, bleeding-edge)")
+  choice=$(menu_select "Package Policy" \
+    "Stable (standard, conservative)" \
+    "Testing (~amd64, bleeding-edge)")
 
   case "$choice" in
-    1) PACKAGE_POLICY="stable" ;;
-    2) PACKAGE_POLICY="testing" ;;
+    *Stable*) PACKAGE_POLICY="stable" ;;
+    *Testing*) PACKAGE_POLICY="testing" ;;
     *) PACKAGE_POLICY="stable" ;;
   esac
 
@@ -464,15 +469,15 @@ config_package_policy() {
 
 config_filesystem() {
   local choice
-  choice=$(menu_dialog "Filesystem" 15 60 \
-    "1" "ext4 (stable, widely supported)" \
-    "2" "btrfs (modern, with subvolumes)" \
-    "3" "xfs (high-performance, large files)")
+  choice=$(menu_select "Filesystem" \
+    "ext4 (stable, widely supported)" \
+    "btrfs (modern, with subvolumes)" \
+    "xfs (high-performance, large files)")
 
   case "$choice" in
-    1) FS_TYPE="ext4" ;;
-    2) FS_TYPE="btrfs" ;;
-    3) FS_TYPE="xfs" ;;
+    *ext4*) FS_TYPE="ext4" ;;
+    *btrfs*) FS_TYPE="btrfs" ;;
+    *xfs*) FS_TYPE="xfs" ;;
     *) FS_TYPE="ext4" ;;
   esac
 
@@ -484,19 +489,30 @@ config_disk() {
   local disk_valid=0
 
   while ((! disk_valid)); do
-    msgbox "Disk Selection" "Available disks will be shown. Please select one."
-
-    printf '\nAvailable disks:\n'
+    printf '\n=== Disk Selection ===\n'
+    printf 'Available disks:\n'
     lsblk -dno NAME,SIZE,TYPE,MODEL | awk '$3=="disk" {printf "  /dev/%-12s %-8s %s\n", $1, $2, substr($0, index($0,$4))}'
+    printf '\n'
 
-    selected_disk=$(input_dialog "Disk Selection" "Enter target disk (e.g., /dev/sda):" "/dev/")
+    selected_disk=$(ask_input "Enter target disk (e.g., /dev/sda)" "/dev/")
 
-    [[ -n "$selected_disk" ]] || { msgbox "Input Error" "Disk path cannot be empty"; continue; }
-    [[ -b "$selected_disk" ]] || { msgbox "Input Error" "Not a block device: $selected_disk"; continue; }
-    [[ "$(lsblk -dno TYPE "$selected_disk" 2>/dev/null)" == "disk" ]] || { msgbox "Input Error" "$selected_disk is not a whole disk"; continue; }
+    if [[ -z "$selected_disk" ]]; then
+      printf 'Error: Disk path cannot be empty\n'
+      continue
+    fi
+
+    if [[ ! -b "$selected_disk" ]]; then
+      printf 'Error: Not a block device: %s\n' "$selected_disk"
+      continue
+    fi
+
+    if [[ "$(lsblk -dno TYPE "$selected_disk" 2>/dev/null)" != "disk" ]]; then
+      printf 'Error: %s is not a whole disk\n' "$selected_disk"
+      continue
+    fi
 
     if findmnt -rn -S "$selected_disk" >/dev/null 2>&1; then
-      msgbox "Input Error" "$selected_disk or its partitions are currently mounted"
+      printf 'Error: %s or its partitions are currently mounted\n' "$selected_disk"
       continue
     fi
 
@@ -517,12 +533,27 @@ config_root_size() {
 
   local root_size
   while true; do
-    root_size=$(input_dialog "Root Partition Size" "Enter root size in GiB (min 20, max $max_root):" "30")
+    root_size=$(ask_input "Root size in GiB (min 20, max $max_root)" "30")
 
-    [[ -n "$root_size" ]] || { msgbox "Input Error" "Root size cannot be empty"; continue; }
-    [[ "$root_size" =~ ^[0-9]+$ ]] || { msgbox "Input Error" "Please enter a whole number"; continue; }
-    ((root_size >= 20)) || { msgbox "Input Error" "Root must be at least 20GiB"; continue; }
-    ((root_size <= max_root)) || { msgbox "Input Error" "Root size too large (max: ${max_root}GiB)"; continue; }
+    if [[ -z "$root_size" ]]; then
+      printf 'Error: Root size cannot be empty\n'
+      continue
+    fi
+
+    if [[ ! "$root_size" =~ ^[0-9]+$ ]]; then
+      printf 'Error: Please enter a whole number\n'
+      continue
+    fi
+
+    if ((root_size < 20)); then
+      printf 'Error: Root must be at least 20GiB\n'
+      continue
+    fi
+
+    if ((root_size > max_root)); then
+      printf 'Error: Root size too large (max: %dGiB)\n' "$max_root"
+      continue
+    fi
 
     ROOT_GB="$root_size"
     log "Root size: ${ROOT_GB}GiB"
@@ -533,26 +564,47 @@ config_root_size() {
 config_identity() {
   local hostname_valid=0
   while ((! hostname_valid)); do
-    HOSTNAME=$(input_dialog "Hostname" "Enter hostname:" "gentoo")
-    [[ -n "$HOSTNAME" ]] || { msgbox "Input Error" "Hostname cannot be empty"; continue; }
-    [[ "$HOSTNAME" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] && hostname_valid=1 || msgbox "Input Error" "Invalid hostname (alphanumeric, dots, hyphens only)"
+    HOSTNAME=$(ask_input "Hostname" "gentoo")
+    if [[ -z "$HOSTNAME" ]]; then
+      printf 'Error: Hostname cannot be empty\n'
+      continue
+    fi
+    if [[ "$HOSTNAME" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]; then
+      hostname_valid=1
+    else
+      printf 'Error: Invalid hostname (alphanumeric, dots, hyphens only)\n'
+    fi
   done
 
   local username_valid=0
   while ((! username_valid)); do
-    USERNAME=$(input_dialog "Username" "Enter username:" "user")
-    [[ -n "$USERNAME" ]] || { msgbox "Input Error" "Username cannot be empty"; continue; }
-    [[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] && username_valid=1 || msgbox "Input Error" "Invalid username (lowercase, digits, underscore, dash only)"
+    USERNAME=$(ask_input "Username" "user")
+    if [[ -z "$USERNAME" ]]; then
+      printf 'Error: Username cannot be empty\n'
+      continue
+    fi
+    if [[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+      username_valid=1
+    else
+      printf 'Error: Invalid username (lowercase, digits, underscore, dash only)\n'
+    fi
   done
 
   local timezone_valid=0
   while ((! timezone_valid)); do
-    TIMEZONE=$(input_dialog "Timezone" "Enter timezone:" "UTC")
-    [[ -n "$TIMEZONE" ]] || { msgbox "Input Error" "Timezone cannot be empty"; continue; }
-    [[ -e "/usr/share/zoneinfo/$TIMEZONE" ]] && timezone_valid=1 || msgbox "Input Error" "Unknown timezone: $TIMEZONE"
+    TIMEZONE=$(ask_input "Timezone" "UTC")
+    if [[ -z "$TIMEZONE" ]]; then
+      printf 'Error: Timezone cannot be empty\n'
+      continue
+    fi
+    if [[ -e "/usr/share/zoneinfo/$TIMEZONE" ]]; then
+      timezone_valid=1
+    else
+      printf 'Error: Unknown timezone: %s\n' "$TIMEZONE"
+    fi
   done
 
-  KEYMAP=$(input_dialog "Keymap" "Enter console keymap:" "us")
+  KEYMAP=$(ask_input "Console keymap" "us")
   [[ -n "$KEYMAP" ]] || KEYMAP="us"
 
   log "Hostname: $HOSTNAME, User: $USERNAME, TZ: $TIMEZONE, Keymap: $KEYMAP"
@@ -579,7 +631,7 @@ config_boot_type() {
     BOOT_TYPE="bios"
   fi
 
-  if [[ $(yesno_dialog "Boot Type" "Use $BOOT_TYPE boot (auto-detected)?") == "yes" ]]; then
+  if [[ $(ask_yesno "Use $BOOT_TYPE boot (auto-detected)?" "y") == "yes" ]]; then
     log "Boot type: $BOOT_TYPE"
   else
     if [[ "$BOOT_TYPE" == "uefi" ]]; then
@@ -638,7 +690,7 @@ show_summary() {
   printf '  Timezone/Keymap : %s / %s\n' "$TIMEZONE" "$KEYMAP"
   printf '\n'
 
-  if [[ $(yesno_dialog "Confirmation" "Proceed with installation? Type YES to confirm") == "yes" ]]; then
+  if [[ $(ask_yesno "Proceed with installation? THIS WILL ERASE $DISK" "n") == "yes" ]]; then
     log "Installation confirmed by user"
   else
     die "Installation cancelled by user"
@@ -828,7 +880,6 @@ main() {
   printf '=== Gentoo Interactive Installer ===\n' | tee -a "$LIVE_LOG"
   printf 'Log: %s\n\n' "$LIVE_LOG" | tee -a "$LIVE_LOG"
 
-  setup_tui_backend
   preflight_checks
   hardware_detection
   interactive_config
@@ -840,7 +891,7 @@ main() {
 
   print_status_table
 
-  msgbox "Installation Status" "Stage 1 complete. Review log for details."
+  show_message "Installation Status" "Stage 1 complete. Review log for details."
   log "Installation stage 1 complete"
 }
 
