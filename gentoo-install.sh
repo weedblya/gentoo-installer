@@ -144,22 +144,22 @@ menu_select() {
   shift
   local options=("$@")
 
-  printf '\n=== %s ===\n' "$title"
+  printf '\n=== %s ===\n' "$title" >&2
   local i=1
   for opt in "${options[@]}"; do
-    printf '  %d) %s\n' "$i" "$opt"
+    printf '  %d) %s\n' "$i" "$opt" >&2
     ((i++))
   done
 
   local choice
   while true; do
-    printf 'Choice [1-%d]: ' "${#options[@]}"
+    printf 'Choice [1-%d]: ' "${#options[@]}" >&2
     read -r choice
     if [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#options[@]})); then
       printf '%s' "${options[$((choice-1))]}"
       return 0
     fi
-    printf 'Invalid choice. Try again.\n'
+    printf 'Invalid choice. Try again.\n' >&2
   done
 }
 
@@ -171,9 +171,9 @@ ask_yesno() {
 
   while true; do
     if [[ "${default,,}" == "y" ]]; then
-      printf '%s [Y/n]: ' "$prompt"
+      printf '%s [Y/n]: ' "$prompt" >&2
     else
-      printf '%s [y/N]: ' "$prompt"
+      printf '%s [y/N]: ' "$prompt" >&2
     fi
     read -r answer
     answer="${answer:-$default}"
@@ -181,7 +181,7 @@ ask_yesno() {
     case "${answer,,}" in
       y|yes) printf 'yes'; return 0 ;;
       n|no)  printf 'no'; return 1 ;;
-      *) printf 'Please answer y or n.\n' ;;
+      *) printf 'Please answer y or n.\n' >&2 ;;
     esac
   done
 }
@@ -193,9 +193,9 @@ ask_input() {
   local value
 
   if [[ -n "$default" ]]; then
-    printf '%s [%s]: ' "$prompt" "$default"
+    printf '%s [%s]: ' "$prompt" "$default" >&2
   else
-    printf '%s: ' "$prompt"
+    printf '%s: ' "$prompt" >&2
   fi
 
   read -r value
