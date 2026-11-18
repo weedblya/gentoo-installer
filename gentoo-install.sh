@@ -592,15 +592,16 @@ config_identity() {
 
   local timezone_valid=0
   while ((! timezone_valid)); do
-    TIMEZONE=$(ask_input "Timezone" "UTC")
+    TIMEZONE=$(ask_input "Timezone (e.g., Europe/Moscow, UTC)" "UTC")
     if [[ -z "$TIMEZONE" ]]; then
-      printf 'Error: Timezone cannot be empty\n'
+      printf 'Error: Timezone cannot be empty\n' >&2
       continue
     fi
-    if [[ -e "/usr/share/zoneinfo/$TIMEZONE" ]]; then
+    # Simple format validation (Region/City or UTC)
+    if [[ "$TIMEZONE" =~ ^(UTC|[A-Z][a-z]+/[A-Z][a-z_]+)$ ]] || [[ "$TIMEZONE" == "UTC" ]]; then
       timezone_valid=1
     else
-      printf 'Error: Unknown timezone: %s\n' "$TIMEZONE"
+      printf 'Error: Invalid timezone format. Use Region/City (e.g., Europe/Moscow) or UTC\n' >&2
     fi
   done
 
