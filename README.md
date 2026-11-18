@@ -1,11 +1,11 @@
 # Gentoo Interactive Installer
 
-Modular, TUI-based Gentoo Linux installer with comprehensive hardware support, flexible desktop environment configuration, and advanced package management options.
+Modular, CLI-based Gentoo Linux installer with comprehensive hardware support, flexible desktop environment configuration, and advanced package management options.
 
 ## Features
 
 ### Core Features
-- **Interactive TUI Menu**: Dialog/whiptail-based configuration wizard with fallback to `select`
+- **Interactive CLI Menu**: Dialog/whiptail-based configuration wizard with fallback to `select`
 - **Comprehensive Logging**: All operations logged to `/tmp/gentoo-install-*.log` for troubleshooting
 - **Error Handling**: Strict mode (`set -euo pipefail`), trap-based cleanup, status tracking
 - **Hardware Detection**: Automatic virtualization and GPU detection
