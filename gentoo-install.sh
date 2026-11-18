@@ -613,14 +613,24 @@ config_identity() {
 
 config_passwords() {
   # Root password
-  printf '\nEnter password for root: '
-  read -rs ROOT_PASS; printf '\n'
-  ((${#ROOT_PASS} >= 8)) || die "Root password must be at least 8 characters"
+  while true; do
+    printf '\nEnter password for root: ' >&2
+    read -rs ROOT_PASS; printf '\n' >&2
+    if [[ -n "$ROOT_PASS" ]]; then
+      break
+    fi
+    printf 'Error: Password cannot be empty\n' >&2
+  done
 
   # User password
-  printf 'Enter password for %s: ' "$USERNAME"
-  read -rs USER_PASS; printf '\n'
-  ((${#USER_PASS} >= 8)) || die "User password must be at least 8 characters"
+  while true; do
+    printf 'Enter password for %s: ' "$USERNAME" >&2
+    read -rs USER_PASS; printf '\n' >&2
+    if [[ -n "$USER_PASS" ]]; then
+      break
+    fi
+    printf 'Error: Password cannot be empty\n' >&2
+  done
 
   log "Passwords configured"
 }
