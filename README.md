@@ -249,18 +249,6 @@ Manual selection is available during interactive configuration.
 - Hyper-V (basic support)
 - Xen (basic support)
 
-## Key Improvements Over Original
-
-1. **TUI Menu System**: Dialog/whiptail instead of pure CLI prompts
-2. **Multiple Init Systems**: OpenRC and systemd support
-3. **Flexible Desktop Environments**: KDE, Hyprland, Niri, MangoWM, minimal
-4. **Kernel Options**: Precompiled, auto-compile, or manual control
-5. **Binary Packages**: Dramatic speedup option
-6. **Advanced Policy Control**: Stable vs testing keywords
-7. **Modular Functions**: Easier to test and maintain
-8. **Comprehensive Summary**: Pre-installation review of all choices
-
-
 ## Contributions
 
 For bug reports, feature requests, or contributions, please use the project's issue tracker.
