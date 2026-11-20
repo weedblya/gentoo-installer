@@ -905,6 +905,12 @@ DISK="$DISK"
 
 echo "=== Stage 2: Chroot Installation ==="
 
+# Prepare Portage directories
+echo ">>> Preparing Portage configuration directories..."
+mkdir -p /etc/portage/package.accept_keywords
+mkdir -p /etc/portage/package.use
+mkdir -p /etc/portage/package.license
+
 # Configure Portage
 echo ">>> Syncing Portage repository..."
 emerge-webrsync || emerge --sync
@@ -915,11 +921,14 @@ cat >> /etc/portage/make.conf << 'MAKECONF'
 
 # CPU Flags
 COMMON_FLAGS="-march=native -O2 -pipe"
-CFLAGS="\${COMMON_FLAGS}"
-CXXFLAGS="\${COMMON_FLAGS}"
-FCFLAGS="\${COMMON_FLAGS}"
-FFLAGS="\${COMMON_FLAGS}"
-MAKEOPTS="-j\$(nproc)"
+CFLAGS="\\\${COMMON_FLAGS}"
+CXXFLAGS="\\\${COMMON_FLAGS}"
+FCFLAGS="\\\${COMMON_FLAGS}"
+FFLAGS="\\\${COMMON_FLAGS}"
+MAKEOPTS="-j\\\$(nproc)"
+
+# Accept all licenses for installation phase
+ACCEPT_LICENSE="*"
 MAKECONF
 
 # Set locale
@@ -937,25 +946,45 @@ ln -sf /usr/share/zoneinfo/\${TIMEZONE} /etc/localtime
 echo ">>> Setting hostname to \${HOSTNAME}..."
 echo "hostname=\"\${HOSTNAME}\"" > /etc/conf.d/hostname
 
+# Function to accept all config changes automatically
+accept_config_changes() {
+  yes | etc-update --automode -5 2>/dev/null || true
+}
+
 # Install kernel
 echo ">>> Installing kernel (\${KERNEL_TYPE})..."
 if [[ "\$KERNEL_TYPE" == "distribution-kernel-bin" ]]; then
-  emerge --quiet sys-kernel/gentoo-kernel-bin
+  emerge --quiet --autounmask-write --autounmask-continue sys-kernel/gentoo-kernel-bin || { echo "ERROR: Failed to install gentoo-kernel-bin"; exit 1; }
+  accept_config_changes
 elif [[ "\$KERNEL_TYPE" == "gentoo-kernel" ]]; then
-  emerge --quiet sys-kernel/gentoo-kernel
+  emerge --quiet --autounmask-write --autounmask-continue sys-kernel/gentoo-kernel || { echo "ERROR: Failed to install gentoo-kernel"; exit 1; }
+  accept_config_changes
+else
+  echo "ERROR: Unknown kernel type: \$KERNEL_TYPE"
+  exit 1
 fi
 
 # Install bootloader
 echo ">>> Installing bootloader..."
 if [[ "\$BOOT_TYPE" == "uefi" ]]; then
-  emerge --quiet sys-boot/grub
-  grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
-  grub-mkconfig -o /boot/grub/grub.cfg
+  emerge --quiet --autounmask-write --autounmask-continue sys-boot/grub || { echo "ERROR: Failed to install grub"; exit 1; }
+  accept_config_changes
+  grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB || { echo "ERROR: grub-install failed"; exit 1; }
+  grub-mkconfig -o /boot/grub/grub.cfg || { echo "ERROR: grub-mkconfig failed"; exit 1; }
+elif [[ "\$BOOT_TYPE" == "bios" ]]; then
+  emerge --quiet --autounmask-write --autounmask-continue sys-boot/grub || { echo "ERROR: Failed to install grub"; exit 1; }
+  accept_config_changes
+  grub-install --target=i386-pc "\$DISK" || { echo "ERROR: grub-install failed for BIOS"; exit 1; }
+  grub-mkconfig -o /boot/grub/grub.cfg || { echo "ERROR: grub-mkconfig failed"; exit 1; }
+else
+  echo "ERROR: Unknown boot type: \$BOOT_TYPE"
+  exit 1
 fi
 
 # Install essential packages
 echo ">>> Installing essential packages..."
-emerge --quiet net-misc/dhcpcd app-admin/sudo
+emerge --quiet --autounmask-write --autounmask-continue net-misc/dhcpcd app-admin/sudo
+accept_config_changes
 
 # Enable services
 if [[ "\$INIT_SYSTEM" == "openrc" ]]; then
@@ -978,10 +1007,14 @@ fi
 
 # Update fstab
 echo ">>> Updating fstab..."
-cat > /etc/fstab << 'FSTAB'
+cat > /etc/fstab << FSTAB
 \${PEFI}  /boot  vfat  defaults,noatime  0 2
 \${PROOT} /      ext4  defaults,noatime  0 1
 FSTAB
+
+if [[ -n "\$PSWAP" ]]; then
+  echo "\${PSWAP}  none   swap  sw               0 0" >> /etc/fstab
+fi
 
 echo "=== Stage 2 complete ==="
 CHROOT_EOF
