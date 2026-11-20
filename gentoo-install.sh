@@ -1045,6 +1045,28 @@ else
   accept_config_changes
 fi
 
+# Pre-install dracut dependencies to avoid configuration issues
+echo ">>> Installing initramfs tools..."
+if ! emerge --quiet --autounmask-write --autounmask-continue sys-kernel/installkernel; then
+  accept_config_changes
+  emerge --quiet sys-kernel/installkernel || echo "WARNING: installkernel installation had issues"
+else
+  accept_config_changes
+fi
+
+# Try to install dracut separately with USE flags that avoid bash-completion issues
+echo ">>> Installing dracut..."
+mkdir -p /etc/portage/package.use
+echo "sys-kernel/dracut -systemd" >> /etc/portage/package.use/dracut
+if ! emerge --quiet --autounmask-write --autounmask-continue sys-kernel/dracut; then
+  accept_config_changes
+  if ! emerge --quiet sys-kernel/dracut; then
+    echo "WARNING: dracut installation failed, kernel installation may fail"
+  fi
+else
+  accept_config_changes
+fi
+
 # Install kernel
 echo ">>> Installing kernel (\${KERNEL_TYPE})..."
 if [[ "\$KERNEL_TYPE" == "distribution-kernel-bin" ]]; then
