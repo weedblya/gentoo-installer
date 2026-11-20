@@ -818,36 +818,31 @@ download_stage3() {
   step "Downloading Stage3"
 
   local stage3_base="https://distfiles.gentoo.org/releases/amd64/autobuilds"
-  local latest_json="$stage3_base/latest-stage3-amd64-openrc.json"
+  local latest_txt="$stage3_base/latest-stage3.txt"
 
+  # Determine stage3 variant based on init system
+  local stage3_pattern="stage3-amd64-openrc"
   if [[ "$INIT_SYSTEM" == "systemd" ]]; then
-    latest_json="$stage3_base/latest-stage3-amd64-systemd.json"
+    stage3_pattern="stage3-amd64-systemd"
   fi
 
   log "Fetching latest stage3 metadata..."
-  local json
-  json=$(curl -s "$latest_json") || die "failed to fetch latest stage3"
+  local metadata
+  metadata=$(curl -s "$latest_txt") || die "failed to fetch stage3 metadata from $latest_txt"
 
+  # Parse the txt file to find the appropriate stage3 tarball
+  # Format: "20261115T170104Z/stage3-amd64-openrc-20261115T170104Z.tar.xz 276277944"
   local filepath
-  # Try multiple parsing methods for robustness
-  filepath=$(printf '%s' "$json" | grep -oP '"uri":\s*"\K[^"]+' 2>/dev/null | head -1)
+  filepath=$(printf '%s' "$metadata" | grep -v '^#' | grep -v '^-' | grep "\.tar\.xz" | grep "$stage3_pattern" | grep -v "desktop\|hardened\|musl\|llvm\|nomultilib" | head -1 | awk '{print $1}')
 
-  if [[ -z "$filepath" ]]; then
-    # Fallback method if grep -oP not available
-    filepath=$(printf '%s' "$json" | grep '"uri"' | head -1 | sed 's/.*"uri"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-  fi
+  [[ -n "$filepath" ]] || die "failed to find $stage3_pattern stage3 in metadata"
 
-  [[ -n "$filepath" ]] || die "failed to parse stage3 URI from: $latest_json"
-
-  # Extract filename from path (e.g., "autobuilds/stage3-amd64-openrc-20241118.tar.xz" -> "stage3-amd64-openrc-20241118.tar.xz")
+  local stage3_url="$stage3_base/$filepath"
   local filename="${filepath##*/}"
-  [[ -n "$filename" ]] || die "failed to extract filename from: $filepath"
-
-  local stage3_url="$stage3_base/$filename"
   local target="$MNT/stage3.tar.xz"
 
   log "Downloading: $filename"
-  wget -q -O "$target" "$stage3_url" || die "failed to download stage3 from $stage3_url"
+  wget -q --show-progress -O "$target" "$stage3_url" || die "failed to download stage3 from $stage3_url"
 
   log "Extracting stage3..."
   tar -xpf "$target" -C "$MNT" || die "failed to extract stage3"
