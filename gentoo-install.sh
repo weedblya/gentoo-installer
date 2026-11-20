@@ -956,6 +956,11 @@ echo ">>> Updating Portage..."
 emerge --oneshot --quiet --autounmask-write --autounmask-continue sys-apps/portage || true
 accept_config_changes
 
+# Install linux-firmware first (required for kernel)
+echo ">>> Installing linux-firmware..."
+emerge --quiet --autounmask-write --autounmask-continue sys-kernel/linux-firmware || echo "WARNING: linux-firmware installation had issues, continuing..."
+accept_config_changes
+
 # Install kernel
 echo ">>> Installing kernel (\${KERNEL_TYPE})..."
 if [[ "\$KERNEL_TYPE" == "distribution-kernel-bin" ]]; then
@@ -976,9 +981,18 @@ fi
 # Install bootloader
 echo ">>> Installing bootloader..."
 if [[ "\$BOOT_TYPE" == "uefi" ]]; then
-  emerge --quiet --autounmask-write --autounmask-continue sys-boot/grub || { echo "ERROR: Failed to install grub"; exit 1; }
+  # Try to install grub with gnu-efi, fallback to alternative if it fails
+  if ! emerge --quiet --autounmask-write --autounmask-continue sys-boot/grub; then
+    echo "WARNING: GRUB installation with gnu-efi failed, trying without..."
+    USE="-grub_platforms_efi-64" emerge --quiet --autounmask-write --autounmask-continue sys-boot/grub || { echo "ERROR: Failed to install grub"; exit 1; }
+  fi
   accept_config_changes
-  grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB || { echo "ERROR: grub-install failed"; exit 1; }
+
+  # Install grub to ESP
+  if ! grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB 2>/dev/null; then
+    echo "WARNING: UEFI grub-install failed, trying removable media installation..."
+    grub-install --target=x86_64-efi --efi-directory=/boot --removable || { echo "ERROR: grub-install failed"; exit 1; }
+  fi
   grub-mkconfig -o /boot/grub/grub.cfg || { echo "ERROR: grub-mkconfig failed"; exit 1; }
 elif [[ "\$BOOT_TYPE" == "bios" ]]; then
   emerge --quiet --autounmask-write --autounmask-continue sys-boot/grub || { echo "ERROR: Failed to install grub"; exit 1; }
