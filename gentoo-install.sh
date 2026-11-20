@@ -853,33 +853,156 @@ download_stage3() {
 }
 
 # =============================================================================
-# Chroot & Second Stage Installation (stub)
+# Prepare for Chroot
+# =============================================================================
+prepare_chroot() {
+  step "Preparing chroot environment"
+
+  # Copy DNS info
+  cp -L /etc/resolv.conf "$MNT/etc/" || warn "failed to copy resolv.conf"
+
+  # Mount necessary filesystems
+  mount --types proc /proc "$MNT/proc" || true
+  mount --rbind /sys "$MNT/sys" && mount --make-rslave "$MNT/sys" || true
+  mount --rbind /dev "$MNT/dev" && mount --make-rslave "$MNT/dev" || true
+  mount --bind /run "$MNT/run" && mount --make-slave "$MNT/run" || true
+
+  log "chroot environment ready"
+}
+
+# =============================================================================
+# Chroot Script Generation
 # =============================================================================
 prepare_chroot_script() {
   step "Preparing chroot installation script"
 
   mkdir -p "$(dirname "$CHROOT_SCRIPT")"
 
-  cat > "$CHROOT_SCRIPT" << 'CHROOT_EOF'
+  # Pass configuration variables to chroot script
+  cat > "$CHROOT_SCRIPT" << CHROOT_EOF
 #!/bin/bash
 # Second-stage installation script (runs inside chroot)
 set -euo pipefail
 
 exec > >(tee -a /install.log) 2>&1
 
-# Will be filled with actual chroot logic
-echo "Chroot installation placeholder"
-echo "This would configure:"
-echo "  - Portage and make.conf"
-echo "  - Kernel compilation"
-echo "  - Package installation"
-echo "  - System configuration"
-echo "  - Bootloader"
+# Configuration passed from main script
+INIT_SYSTEM="$INIT_SYSTEM"
+DESKTOP_PROFILE="$DESKTOP_PROFILE"
+BOOT_TYPE="$BOOT_TYPE"
+HOSTNAME="$HOSTNAME"
+USERNAME="$USERNAME"
+TIMEZONE="$TIMEZONE"
+KEYMAP="$KEYMAP"
+USE_BINHOST=$USE_BINHOST
+KERNEL_TYPE="$KERNEL_TYPE"
+PACKAGE_POLICY="$PACKAGE_POLICY"
+VIDEO_CARDS="$VIDEO_CARDS"
+HAVE_NVIDIA=$HAVE_NVIDIA
+PEFI="$PEFI"
+PROOT="$PROOT"
+DISK="$DISK"
 
+echo "=== Stage 2: Chroot Installation ==="
+
+# Configure Portage
+echo ">>> Syncing Portage repository..."
+emerge-webrsync || emerge --sync
+
+# Update make.conf
+echo ">>> Configuring make.conf..."
+cat >> /etc/portage/make.conf << 'MAKECONF'
+
+# CPU Flags
+COMMON_FLAGS="-march=native -O2 -pipe"
+CFLAGS="\${COMMON_FLAGS}"
+CXXFLAGS="\${COMMON_FLAGS}"
+FCFLAGS="\${COMMON_FLAGS}"
+FFLAGS="\${COMMON_FLAGS}"
+MAKEOPTS="-j\$(nproc)"
+MAKECONF
+
+# Set locale
+echo ">>> Configuring locale..."
+echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
+locale-gen
+eselect locale set en_US.utf8
+env-update && source /etc/profile
+
+# Set timezone
+echo ">>> Setting timezone to \${TIMEZONE}..."
+ln -sf /usr/share/zoneinfo/\${TIMEZONE} /etc/localtime
+
+# Set hostname
+echo ">>> Setting hostname to \${HOSTNAME}..."
+echo "hostname=\"\${HOSTNAME}\"" > /etc/conf.d/hostname
+
+# Install kernel
+echo ">>> Installing kernel (\${KERNEL_TYPE})..."
+if [[ "\$KERNEL_TYPE" == "distribution-kernel-bin" ]]; then
+  emerge --quiet sys-kernel/gentoo-kernel-bin
+elif [[ "\$KERNEL_TYPE" == "gentoo-kernel" ]]; then
+  emerge --quiet sys-kernel/gentoo-kernel
+fi
+
+# Install bootloader
+echo ">>> Installing bootloader..."
+if [[ "\$BOOT_TYPE" == "uefi" ]]; then
+  emerge --quiet sys-boot/grub
+  grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
+  grub-mkconfig -o /boot/grub/grub.cfg
+fi
+
+# Install essential packages
+echo ">>> Installing essential packages..."
+emerge --quiet net-misc/dhcpcd app-admin/sudo
+
+# Enable services
+if [[ "\$INIT_SYSTEM" == "openrc" ]]; then
+  rc-update add dhcpcd default
+fi
+
+# Set root password
+echo ">>> Setting root password..."
+echo "root:root" | chpasswd
+
+# Create user
+if [[ -n "\$USERNAME" ]]; then
+  echo ">>> Creating user \${USERNAME}..."
+  useradd -m -G wheel,audio,video,usb -s /bin/bash "\$USERNAME"
+  echo "\${USERNAME}:\${USERNAME}" | chpasswd
+
+  # Enable sudo
+  sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
+fi
+
+# Update fstab
+echo ">>> Updating fstab..."
+cat > /etc/fstab << 'FSTAB'
+\${PEFI}  /boot  vfat  defaults,noatime  0 2
+\${PROOT} /      ext4  defaults,noatime  0 1
+FSTAB
+
+echo "=== Stage 2 complete ==="
 CHROOT_EOF
 
   chmod +x "$CHROOT_SCRIPT"
   log "chroot script prepared"
+}
+
+# =============================================================================
+# Execute Chroot Installation
+# =============================================================================
+run_chroot_install() {
+  step "Running chroot installation"
+
+  prepare_chroot
+
+  log "entering chroot and running installation script..."
+  chroot "$MNT" /bin/bash -c "/root/install_in_chroot.sh" || die "chroot installation failed"
+
+  log "chroot installation complete"
+  record OK "chroot install" "system configured"
 }
 
 # =============================================================================
@@ -898,11 +1021,12 @@ main() {
   mount_filesystems
   download_stage3
   prepare_chroot_script
+  run_chroot_install
 
   print_status_table
 
-  show_message "Installation Status" "Stage 1 complete. Review log for details."
-  log "Installation stage 1 complete"
+  show_message "Installation Complete" "Gentoo installation finished. You may reboot now."
+  log "Installation complete"
 }
 
 main "$@"
