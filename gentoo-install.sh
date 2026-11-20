@@ -817,6 +817,12 @@ mount_filesystems() {
 download_stage3() {
   step "Downloading Stage3"
 
+  # Check available disk space (need at least 2GB for stage3 and extraction)
+  local available_space_mb=$(df -m "$MNT" | tail -1 | awk '{print $4}')
+  if [[ "$available_space_mb" -lt 2048 ]]; then
+    die "Insufficient disk space: ${available_space_mb}MB available, need at least 2048MB"
+  fi
+
   local stage3_base="https://distfiles.gentoo.org/releases/amd64/autobuilds"
   local latest_txt="$stage3_base/latest-stage3.txt"
 
@@ -828,7 +834,14 @@ download_stage3() {
 
   log "Fetching latest stage3 metadata..."
   local metadata
-  metadata=$(curl -s "$latest_txt") || die "failed to fetch stage3 metadata from $latest_txt"
+  local retry_count=0
+  while [[ $retry_count -lt 3 ]]; do
+    if metadata=$(curl -s --connect-timeout 30 --max-time 60 "$latest_txt"); then
+      break
+    fi
+    ((retry_count++))
+    [[ $retry_count -lt 3 ]] && { log "Retry $retry_count/3..."; sleep 2; } || die "failed to fetch stage3 metadata after 3 attempts"
+  done
 
   # Parse the txt file to find the appropriate stage3 tarball
   # Format: "20261115T170104Z/stage3-amd64-openrc-20261115T170104Z.tar.xz 276277944"
@@ -842,7 +855,7 @@ download_stage3() {
   local target="$MNT/stage3.tar.xz"
 
   log "Downloading: $filename"
-  wget -q --show-progress -O "$target" "$stage3_url" || die "failed to download stage3 from $stage3_url"
+  wget --timeout=60 --tries=3 --show-progress -O "$target" "$stage3_url" || die "failed to download stage3 from $stage3_url"
 
   log "Extracting stage3..."
   tar -xpf "$target" -C "$MNT" || die "failed to extract stage3"
@@ -901,7 +914,11 @@ VIDEO_CARDS="$VIDEO_CARDS"
 HAVE_NVIDIA=$HAVE_NVIDIA
 PEFI="$PEFI"
 PROOT="$PROOT"
+PSWAP="$PSWAP"
 DISK="$DISK"
+FS_TYPE="$FS_TYPE"
+ROOT_PASS='$ROOT_PASS'
+USER_PASS='$USER_PASS'
 
 echo "=== Stage 2: Chroot Installation ==="
 
@@ -910,6 +927,7 @@ echo ">>> Preparing Portage configuration directories..."
 mkdir -p /etc/portage/package.accept_keywords
 mkdir -p /etc/portage/package.use
 mkdir -p /etc/portage/package.license
+mkdir -p /etc/portage/package.mask
 
 # Configure Portage
 echo ">>> Syncing Portage repository..."
@@ -931,6 +949,43 @@ MAKEOPTS="-j\\\$(nproc)"
 ACCEPT_LICENSE="*"
 MAKECONF
 
+# Add VIDEO_CARDS if specified
+if [[ -n "\$VIDEO_CARDS" ]]; then
+  echo "VIDEO_CARDS=\"\$VIDEO_CARDS\"" >> /etc/portage/make.conf
+  echo ">>> Video cards set to: \$VIDEO_CARDS"
+fi
+
+# Configure binary packages if enabled
+if [[ "\$USE_BINHOST" == "1" ]]; then
+  echo 'FEATURES="getbinpkg"' >> /etc/portage/make.conf
+  echo 'EMERGE_DEFAULT_OPTS="--getbinpkg"' >> /etc/portage/make.conf
+  echo ">>> Binary package support enabled"
+fi
+
+# Set ACCEPT_KEYWORDS based on package policy
+if [[ "\$PACKAGE_POLICY" == "testing" ]]; then
+  echo 'ACCEPT_KEYWORDS="~amd64"' >> /etc/portage/make.conf
+  echo ">>> Package policy set to testing (~amd64)"
+else
+  echo ">>> Package policy set to stable (default)"
+fi
+
+# Select appropriate profile
+echo ">>> Selecting system profile..."
+if [[ "\$INIT_SYSTEM" == "systemd" ]]; then
+  if [[ "\$DESKTOP_PROFILE" != "minimal" ]]; then
+    eselect profile set default/linux/amd64/23.0/desktop/systemd
+  else
+    eselect profile set default/linux/amd64/23.0/systemd
+  fi
+else
+  if [[ "\$DESKTOP_PROFILE" != "minimal" ]]; then
+    eselect profile set default/linux/amd64/23.0/desktop
+  else
+    eselect profile set default/linux/amd64/23.0
+  fi
+fi
+
 # Set locale
 echo ">>> Configuring locale..."
 echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
@@ -944,7 +999,28 @@ ln -sf /usr/share/zoneinfo/\${TIMEZONE} /etc/localtime
 
 # Set hostname
 echo ">>> Setting hostname to \${HOSTNAME}..."
-echo "hostname=\"\${HOSTNAME}\"" > /etc/conf.d/hostname
+if [[ "\$INIT_SYSTEM" == "systemd" ]]; then
+  echo "\${HOSTNAME}" > /etc/hostname
+else
+  echo "hostname=\"\${HOSTNAME}\"" > /etc/conf.d/hostname
+fi
+
+# Configure /etc/hosts
+cat > /etc/hosts << HOSTS
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   \${HOSTNAME}.localdomain \${HOSTNAME}
+HOSTS
+
+# Set console keymap
+if [[ -n "\$KEYMAP" ]]; then
+  echo ">>> Setting console keymap to \${KEYMAP}..."
+  if [[ "\$INIT_SYSTEM" == "systemd" ]]; then
+    echo "KEYMAP=\${KEYMAP}" > /etc/vconsole.conf
+  else
+    sed -i "s/^keymap=.*/keymap=\"\${KEYMAP}\"/" /etc/conf.d/keymaps 2>/dev/null || echo "keymap=\"\${KEYMAP}\"" > /etc/conf.d/keymaps
+  fi
+fi
 
 # Function to accept all config changes automatically
 accept_config_changes() {
@@ -953,26 +1029,47 @@ accept_config_changes() {
 
 # Update Portage to latest version
 echo ">>> Updating Portage..."
-emerge --oneshot --quiet --autounmask-write --autounmask-continue sys-apps/portage || true
-accept_config_changes
+if ! emerge --oneshot --quiet --autounmask-write --autounmask-continue sys-apps/portage; then
+  accept_config_changes
+  emerge --oneshot --quiet sys-apps/portage || echo "WARNING: Portage update had issues, continuing with existing version..."
+else
+  accept_config_changes
+fi
 
 # Install linux-firmware first (required for kernel)
 echo ">>> Installing linux-firmware..."
-emerge --quiet --autounmask-write --autounmask-continue sys-kernel/linux-firmware || echo "WARNING: linux-firmware installation had issues, continuing..."
-accept_config_changes
+if ! emerge --quiet --autounmask-write --autounmask-continue sys-kernel/linux-firmware; then
+  accept_config_changes
+  emerge --quiet sys-kernel/linux-firmware || echo "WARNING: linux-firmware installation had issues, continuing..."
+else
+  accept_config_changes
+fi
 
 # Install kernel
 echo ">>> Installing kernel (\${KERNEL_TYPE})..."
 if [[ "\$KERNEL_TYPE" == "distribution-kernel-bin" ]]; then
-  emerge --quiet --autounmask-write --autounmask-continue sys-kernel/gentoo-kernel-bin || { echo "ERROR: Failed to install gentoo-kernel-bin"; exit 1; }
-  accept_config_changes
+  if ! emerge --quiet --autounmask-write --autounmask-continue sys-kernel/gentoo-kernel-bin; then
+    accept_config_changes
+    emerge --quiet sys-kernel/gentoo-kernel-bin || { echo "ERROR: Failed to install gentoo-kernel-bin"; exit 1; }
+  else
+    accept_config_changes
+  fi
 elif [[ "\$KERNEL_TYPE" == "gentoo-kernel" ]]; then
   echo "Attempting to install gentoo-kernel (may take a while)..."
   if ! emerge --quiet --autounmask-write --autounmask-continue sys-kernel/gentoo-kernel; then
-    echo "WARNING: gentoo-kernel installation failed, falling back to gentoo-kernel-bin..."
-    emerge --quiet --autounmask-write --autounmask-continue sys-kernel/gentoo-kernel-bin || { echo "ERROR: Failed to install fallback kernel"; exit 1; }
+    accept_config_changes
+    if ! emerge --quiet sys-kernel/gentoo-kernel; then
+      echo "WARNING: gentoo-kernel installation failed, falling back to gentoo-kernel-bin..."
+      if ! emerge --quiet --autounmask-write --autounmask-continue sys-kernel/gentoo-kernel-bin; then
+        accept_config_changes
+        emerge --quiet sys-kernel/gentoo-kernel-bin || { echo "ERROR: Failed to install fallback kernel"; exit 1; }
+      else
+        accept_config_changes
+      fi
+    fi
+  else
+    accept_config_changes
   fi
-  accept_config_changes
 else
   echo "ERROR: Unknown kernel type: \$KERNEL_TYPE"
   exit 1
@@ -980,23 +1077,49 @@ fi
 
 # Install bootloader
 echo ">>> Installing bootloader..."
+
+# Verify kernel is installed before proceeding
+if ! ls /boot/vmlinuz-* >/dev/null 2>&1 && ! ls /boot/kernel-* >/dev/null 2>&1; then
+  echo "ERROR: No kernel found in /boot before bootloader installation"
+  exit 1
+fi
+
 if [[ "\$BOOT_TYPE" == "uefi" ]]; then
+  # Verify EFI partition is mounted
+  if ! mountpoint -q /boot/efi; then
+    echo "ERROR: /boot/efi is not mounted"
+    exit 1
+  fi
+
   # Try to install grub with gnu-efi, fallback to alternative if it fails
   if ! emerge --quiet --autounmask-write --autounmask-continue sys-boot/grub; then
-    echo "WARNING: GRUB installation with gnu-efi failed, trying without..."
-    USE="-grub_platforms_efi-64" emerge --quiet --autounmask-write --autounmask-continue sys-boot/grub || { echo "ERROR: Failed to install grub"; exit 1; }
+    accept_config_changes
+    if ! emerge --quiet sys-boot/grub; then
+      echo "WARNING: GRUB installation with gnu-efi failed, trying without..."
+      if ! USE="-grub_platforms_efi-64" emerge --quiet --autounmask-write --autounmask-continue sys-boot/grub; then
+        accept_config_changes
+        USE="-grub_platforms_efi-64" emerge --quiet sys-boot/grub || { echo "ERROR: Failed to install grub"; exit 1; }
+      else
+        accept_config_changes
+      fi
+    fi
+  else
+    accept_config_changes
   fi
-  accept_config_changes
 
   # Install grub to ESP
-  if ! grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB 2>/dev/null; then
+  if ! grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB 2>/dev/null; then
     echo "WARNING: UEFI grub-install failed, trying removable media installation..."
-    grub-install --target=x86_64-efi --efi-directory=/boot --removable || { echo "ERROR: grub-install failed"; exit 1; }
+    grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable || { echo "ERROR: grub-install failed"; exit 1; }
   fi
   grub-mkconfig -o /boot/grub/grub.cfg || { echo "ERROR: grub-mkconfig failed"; exit 1; }
 elif [[ "\$BOOT_TYPE" == "bios" ]]; then
-  emerge --quiet --autounmask-write --autounmask-continue sys-boot/grub || { echo "ERROR: Failed to install grub"; exit 1; }
-  accept_config_changes
+  if ! emerge --quiet --autounmask-write --autounmask-continue sys-boot/grub; then
+    accept_config_changes
+    emerge --quiet sys-boot/grub || { echo "ERROR: Failed to install grub"; exit 1; }
+  else
+    accept_config_changes
+  fi
   grub-install --target=i386-pc "\$DISK" || { echo "ERROR: grub-install failed for BIOS"; exit 1; }
   grub-mkconfig -o /boot/grub/grub.cfg || { echo "ERROR: grub-mkconfig failed"; exit 1; }
 else
@@ -1006,23 +1129,59 @@ fi
 
 # Install essential packages
 echo ">>> Installing essential packages..."
-emerge --quiet --autounmask-write --autounmask-continue net-misc/dhcpcd app-admin/sudo
-accept_config_changes
+ESSENTIAL_PKGS="net-misc/dhcpcd app-admin/sudo app-editors/nano app-admin/sysklogd sys-process/cronie"
+
+# Add filesystem-specific tools
+case "\$FS_TYPE" in
+  ext4)
+    ESSENTIAL_PKGS="\$ESSENTIAL_PKGS sys-fs/e2fsprogs"
+    ;;
+  btrfs)
+    ESSENTIAL_PKGS="\$ESSENTIAL_PKGS sys-fs/btrfs-progs"
+    ;;
+  xfs)
+    ESSENTIAL_PKGS="\$ESSENTIAL_PKGS sys-fs/xfsprogs"
+    ;;
+esac
+
+if ! emerge --quiet --autounmask-write --autounmask-continue \$ESSENTIAL_PKGS; then
+  accept_config_changes
+  emerge --quiet \$ESSENTIAL_PKGS || { echo "ERROR: Failed to install essential packages"; exit 1; }
+else
+  accept_config_changes
+fi
 
 # Enable services
 if [[ "\$INIT_SYSTEM" == "openrc" ]]; then
   rc-update add dhcpcd default
+  rc-update add sysklogd default
+  rc-update add cronie default
+elif [[ "\$INIT_SYSTEM" == "systemd" ]]; then
+  systemctl enable systemd-networkd
+  systemctl enable systemd-resolved
+  systemctl enable cronie
 fi
 
 # Set root password
 echo ">>> Setting root password..."
-echo "root:root" | chpasswd
+if [[ -n "\$ROOT_PASS" ]]; then
+  echo "root:\$ROOT_PASS" | chpasswd
+else
+  echo "root:root" | chpasswd
+  echo "WARNING: Using default password 'root' for root user"
+fi
 
 # Create user
 if [[ -n "\$USERNAME" ]]; then
   echo ">>> Creating user \${USERNAME}..."
   useradd -m -G wheel,audio,video,usb -s /bin/bash "\$USERNAME"
-  echo "\${USERNAME}:\${USERNAME}" | chpasswd
+
+  if [[ -n "\$USER_PASS" ]]; then
+    echo "\${USERNAME}:\$USER_PASS" | chpasswd
+  else
+    echo "\${USERNAME}:\${USERNAME}" | chpasswd
+    echo "WARNING: Using default password '\${USERNAME}' for user \${USERNAME}"
+  fi
 
   # Enable sudo
   sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
@@ -1031,13 +1190,23 @@ fi
 # Update fstab
 echo ">>> Updating fstab..."
 cat > /etc/fstab << FSTAB
-\${PEFI}  /boot  vfat  defaults,noatime  0 2
-\${PROOT} /      ext4  defaults,noatime  0 1
+# <fs>      <mountpoint>  <type>  <opts>              <dump> <pass>
 FSTAB
 
-if [[ -n "\$PSWAP" ]]; then
-  echo "\${PSWAP}  none   swap  sw               0 0" >> /etc/fstab
+# Add EFI partition for UEFI systems
+if [[ "\$BOOT_TYPE" == "uefi" && -n "\$PEFI" ]]; then
+  echo "\${PEFI}  /boot/efi  vfat  defaults,noatime  0 2" >> /etc/fstab
 fi
+
+# Add root partition with correct filesystem type
+echo "\${PROOT}  /  \${FS_TYPE}  defaults,noatime  0 1" >> /etc/fstab
+
+# Add swap partition
+if [[ -n "\$PSWAP" ]]; then
+  echo "\${PSWAP}  none  swap  sw  0 0" >> /etc/fstab
+fi
+
+echo ">>> fstab configuration complete"
 
 echo "=== Stage 2 complete ==="
 CHROOT_EOF
