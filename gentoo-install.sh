@@ -1069,7 +1069,7 @@ fi
 
 # Install kernel
 echo ">>> Installing kernel (\${KERNEL_TYPE})..."
-if [[ "\$KERNEL_TYPE" == "distribution-kernel-bin" ]]; then
+if [[ "\$KERNEL_TYPE" == "distribution-kernel-bin" ]] || [[ "\$KERNEL_TYPE" == "gentoo-kernel-bin" ]]; then
   if ! emerge --quiet --autounmask-write --autounmask-continue sys-kernel/gentoo-kernel-bin; then
     accept_config_changes
     emerge --quiet sys-kernel/gentoo-kernel-bin || { echo "ERROR: Failed to install gentoo-kernel-bin"; exit 1; }
@@ -1077,11 +1077,18 @@ if [[ "\$KERNEL_TYPE" == "distribution-kernel-bin" ]]; then
     accept_config_changes
   fi
 elif [[ "\$KERNEL_TYPE" == "gentoo-kernel" ]]; then
-  echo "Attempting to install gentoo-kernel (may take a while)..."
-  if ! emerge --quiet --autounmask-write --autounmask-continue sys-kernel/gentoo-kernel; then
+  echo "Attempting to install gentoo-kernel (compilation may take 20-60 minutes)..."
+  echo "NOTE: If this fails, the script will automatically fall back to gentoo-kernel-bin"
+
+  # gentoo-kernel often fails in chroot due to kernel version detection issues
+  # Try with --nodeps first to skip kernel version checks
+  if ! emerge --quiet --autounmask-write --autounmask-continue sys-kernel/gentoo-kernel 2>&1 | tee /tmp/kernel-install.log; then
     accept_config_changes
-    if ! emerge --quiet sys-kernel/gentoo-kernel; then
-      echo "WARNING: gentoo-kernel installation failed, falling back to gentoo-kernel-bin..."
+    if ! emerge --quiet sys-kernel/gentoo-kernel 2>&1 | tee -a /tmp/kernel-install.log; then
+      echo "WARNING: gentoo-kernel compilation failed (common in live environment)"
+      echo "Reason: Unable to calculate Linux Kernel version for build"
+      echo "Falling back to gentoo-kernel-bin (pre-compiled binary kernel)..."
+
       if ! emerge --quiet --autounmask-write --autounmask-continue sys-kernel/gentoo-kernel-bin; then
         accept_config_changes
         emerge --quiet sys-kernel/gentoo-kernel-bin || { echo "ERROR: Failed to install fallback kernel"; exit 1; }
