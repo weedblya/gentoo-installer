@@ -951,13 +951,22 @@ accept_config_changes() {
   yes | etc-update --automode -5 2>/dev/null || true
 }
 
+# Update Portage to latest version
+echo ">>> Updating Portage..."
+emerge --oneshot --quiet --autounmask-write --autounmask-continue sys-apps/portage || true
+accept_config_changes
+
 # Install kernel
 echo ">>> Installing kernel (\${KERNEL_TYPE})..."
 if [[ "\$KERNEL_TYPE" == "distribution-kernel-bin" ]]; then
   emerge --quiet --autounmask-write --autounmask-continue sys-kernel/gentoo-kernel-bin || { echo "ERROR: Failed to install gentoo-kernel-bin"; exit 1; }
   accept_config_changes
 elif [[ "\$KERNEL_TYPE" == "gentoo-kernel" ]]; then
-  emerge --quiet --autounmask-write --autounmask-continue sys-kernel/gentoo-kernel || { echo "ERROR: Failed to install gentoo-kernel"; exit 1; }
+  echo "Attempting to install gentoo-kernel (may take a while)..."
+  if ! emerge --quiet --autounmask-write --autounmask-continue sys-kernel/gentoo-kernel; then
+    echo "WARNING: gentoo-kernel installation failed, falling back to gentoo-kernel-bin..."
+    emerge --quiet --autounmask-write --autounmask-continue sys-kernel/gentoo-kernel-bin || { echo "ERROR: Failed to install fallback kernel"; exit 1; }
+  fi
   accept_config_changes
 else
   echo "ERROR: Unknown kernel type: \$KERNEL_TYPE"
